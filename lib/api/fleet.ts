@@ -1,0 +1,283 @@
+import { apiFetch } from "./client";
+
+export type FleetRun = {
+  id: string;
+  campaignId: string;
+  ownerId: string | null;
+  provider?: string;
+  status: string;
+  leadCount: number;
+  recommendedPods?: number;
+  chosenPods?: number;
+  estCost?: number;
+  gpuType?: string;
+  concurrencyPerPod?: number;
+  /** How many pods were requested vs actually launched (set after provisioning). */
+  podsRequested?: number;
+  podsLaunched?: number;
+  /** Human-readable note when fewer pods launched than requested (under-provisioned). */
+  provisionWarning?: string | null;
+  /** Launch behavior: dial on boot vs wait for Start; reap pods on drain vs keep up. */
+  autoStart?: boolean;
+  autoDestroy?: boolean;
+  /** Live dialing gate — false while a "ready" fleet waits for Start. */
+  dialingEnabled?: boolean;
+  created_at?: string;
+};
+
+/** One live fleet (a run) grouped for the Fleets tab, with pod + funnel + cost rollups. */
+export type FleetSummary = {
+  id: string;
+  campaignId: string;
+  assistantName: string | null;
+  ownerEmail: string | null;
+  status: string;
+  provider?: string;
+  autoStart: boolean;
+  autoDestroy: boolean;
+  dialingEnabled: boolean;
+  chosenPods?: number;
+  podsRequested?: number;
+  podsLaunched?: number;
+  podCounts: Record<string, number>;
+  podTotal: number;
+  funnel: { total: number; called: number; failed: number; pending: number; locked: number; done: number };
+  cost: { burnPerHr: number; spend: number };
+  requestedAt?: string;
+  startedAt?: string;
+};
+
+/** Campaign config embedded in a run detail (null when the campaign was deleted). */
+export type FleetRunCampaign = {
+  id: string;
+  assistantId: string | null;
+  assistantName: string | null;
+  fromNumber: string | null;
+  concurrency: number | null;
+  delayBetweenCalls: number | null;
+  maxCallDuration: number | null;
+  listId: string | null;
+  leadCount: number | null;
+  status: string;
+  created_at: string | null;
+};
+
+/** A sampled lead shown to the admin in the review dialog. */
+export type LeadPreview = {
+  id: string;
+  name: string;
+  phone: string;
+  status: string | null;
+  vars: Record<string, unknown>;
+};
+
+export type FleetRunDetail = FleetRun & {
+  campaign: FleetRunCampaign | null;
+  ownerEmail: string | null;
+  /** First ~25 leads of the campaign so the admin can size the fleet from the list. */
+  leadsPreview: LeadPreview[];
+};
+
+/** Pod lifecycle status. Includes recovery states (`missing`/`deprecated`) and
+ *  the previously-undeclared `paused`. Unknown values degrade to a neutral badge. */
+export type PodStatus =
+  | "provisioning" | "running" | "idle" | "ready" | "paused"
+  | "failed" | "terminated" | "missing" | "deprecated"
+  | (string & {});
+
+export type PodRecord = {
+  id: string;
+  runpodId: string;
+  /** "vastai" | "runpod" — legacy pods (no value) are treated as RunPod. */
+  provider?: string;
+  /** Provider instance id (Vast) — runpodId mirrors it for back-compat. */
+  providerId?: string | null;
+  runId: string;
+  shardIndex: number;
+  status: PodStatus;
+  /** Campaign pods are lead-bound; inbound pods hold warm capacity for inbound calls. */
+  kind?: "campaign" | "inbound";
+  gpuType: string;
+  publicUrl: string | null;
+  costPerHr: number;
+  accumulatedCost: number;
+  ownerId: string | null;
+  /** Deployment timestamps (ISO-8601). created_at = pod-doc insert; startedAt = when
+   *  the provider instance actually came up; terminatedAt = teardown. */
+  created_at?: string | null;
+  startedAt?: string | null;
+  terminatedAt?: string | null;
+  /** Last reconcile sighting (ISO-8601) — set when a pod is detected/marked missing. */
+  lastSeenAt?: string | null;
+  /** Health probe result, when known. */
+  healthy?: boolean | null;
+  /** Inbound routing token — join key into the inbound slot registry. */
+  inboundToken?: string | null;
+};
+
+/** Fleet-global inbound prewarm config — how much warm inbound capacity to hold. */
+export type InboundPrewarmConfig = {
+  enabled: boolean;
+  gpuType: string | null;
+  region: string | null;
+  warmPods: number;
+  podImage: string | null;
+  busyMessage: string;
+  /** Optional hard cap on $/hr for prewarmed inbound pods (null = no cap). */
+  maxPrice?: number | null;
+  updatedBy?: string | null;
+  updatedAt?: string | null;
+};
+
+/** Live inbound capacity slot — one row per warm pod's routing registration.
+ *  `podId` equals a pod's `inboundToken` (join key into the pod list). */
+export type InboundSlot = {
+  podId: string;
+  host: string;
+  status: string;
+  cap: number;
+  active: number;
+};
+
+/** A campaign as listed in the admin Deploy dialog dropdown (cross-user). */
+export type FleetCampaign = {
+  id: string;
+  ownerId: string | null;
+  ownerEmail: string | null;
+  assistantName: string | null;
+  leadCount: number;
+  hasNumberList: boolean;
+  fromNumber: string | null;
+  status: string | null;
+};
+
+// ── Vast offer preview (for the launch dialog) ──────────────────────────────
+export type VastOffer = {
+  id: number;
+  gpu: string;
+  numGpus: number;
+  vramGb: number;
+  ramGb: number;
+  diskGb: number;
+  dph: number | null;
+  reliability: number;
+  location: string;
+};
+export type OffersByGpu = { gpu: string; offers: VastOffer[]; error?: string };
+export type OffersPreview = { region: string | null; maxPrice: number | null; gpus: OffersByGpu[] };
+
+export type LaunchBody = {
+  campaignId: string;
+  pods: number;
+  concurrency: number;
+  gpus?: string;
+  region?: string;
+  maxPrice?: number;
+  autoStart?: boolean;
+  autoDestroy?: boolean;
+  dryRun?: boolean;
+};
+export type LaunchDryRun = {
+  dryRun: true;
+  campaignId: string;
+  leadCount: number;
+  recommendation: { recommendedPods: number; chosenPods: number; estHours: number; estCost: number | null };
+  offers: OffersPreview;
+};
+export type LaunchResult = { id: string; status: string; chosenPods: number };
+
+export type RunMonitor = {
+  runId: string;
+  campaignId: string;
+  status: string;
+  pods: PodRecord[];
+  funnel: {
+    total: number; called: number; failed: number; locked: number;
+    pending: number; done: number; remaining: number;
+  };
+  recentCalls: { to: string; status: string; durationSeconds: number | null; endedAt: string | null; callSid: string }[];
+  cost: { burnPerHr: number; spend: number };
+};
+
+export type PodLogs = {
+  provider: string;
+  instanceId: string;
+  tail: number;
+  daemon: boolean;
+  logs: string;
+};
+
+/** Server-paginated pod registry. `stats` aggregate the whole collection (not the page). */
+export type PodsPage = {
+  items: PodRecord[];
+  total: number;
+  stats: { activePods: number; burnPerHr: number; podSpend: number };
+};
+export type PodSortKey = "status" | "provider" | "gpu" | "costPerHr" | "spent" | "deployed" | "created" | "instance";
+export type PodsQuery = { skip?: number; limit?: number; sort?: PodSortKey; dir?: "asc" | "desc" };
+
+export const Fleet = {
+  pods: (q: PodsQuery = {}) => {
+    const qs = new URLSearchParams();
+    if (q.skip != null) qs.set("skip", String(q.skip));
+    if (q.limit != null) qs.set("limit", String(q.limit));
+    if (q.sort) qs.set("sort", q.sort);
+    if (q.dir) qs.set("dir", q.dir);
+    const s = qs.toString();
+    return apiFetch<PodsPage>(`/admin/fleet/pods${s ? `?${s}` : ""}`);
+  },
+  runs: () => apiFetch<FleetRun[]>("/admin/fleet/runs"),
+  fleets: () => apiFetch<FleetSummary[]>("/admin/fleet/fleets"),
+  runDetail: (id: string) => apiFetch<FleetRunDetail>(`/admin/fleet/runs/${id}`),
+  allocations: () => apiFetch<any[]>("/admin/fleet/allocations"),
+  terminatePod: (id: string) =>
+    apiFetch(`/admin/fleet/pods/${id}/terminate`, { method: "POST" }),
+  pausePod: (id: string) =>
+    apiFetch<{ ok: boolean }>(`/admin/fleet/pods/${id}/pause`, { method: "POST" }),
+  resumePod: (id: string) =>
+    apiFetch<{ ok: boolean }>(`/admin/fleet/pods/${id}/resume`, { method: "POST" }),
+  podLogs: (id: string, opts: { tail?: number; daemon?: boolean } = {}) => {
+    const qs = new URLSearchParams();
+    if (opts.tail) qs.set("tail", String(opts.tail));
+    if (opts.daemon) qs.set("daemon", "true");
+    const q = qs.toString();
+    return apiFetch<PodLogs>(`/admin/fleet/pods/${id}/logs${q ? `?${q}` : ""}`);
+  },
+  approveRun: (id: string, mods: { chosenPods?: number; gpuType?: string; concurrencyPerPod?: number; autoStart?: boolean; autoDestroy?: boolean }) =>
+    apiFetch(`/admin/fleet/runs/${id}/approve`, { method: "PUT", body: JSON.stringify(mods) }),
+  rejectRun: (id: string, reason: string) =>
+    apiFetch(`/admin/fleet/runs/${id}/reject`, { method: "PUT", body: JSON.stringify({ reason }) }),
+  // ── Vast fleet ops ──
+  campaigns: () => apiFetch<FleetCampaign[]>("/admin/fleet/campaigns"),
+  offers: (p: { gpus?: string; region?: string; maxPrice?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (p.gpus) qs.set("gpus", p.gpus);
+    if (p.region) qs.set("region", p.region);
+    if (p.maxPrice) qs.set("maxPrice", String(p.maxPrice));
+    return apiFetch<OffersPreview>(`/admin/fleet/offers?${qs.toString()}`);
+  },
+  launch: (b: LaunchBody) =>
+    apiFetch<LaunchDryRun | LaunchResult>("/admin/fleet/launch", { method: "POST", body: JSON.stringify(b) }),
+  startRun: (id: string) => apiFetch<{ ok: boolean; status: string }>(`/admin/fleet/runs/${id}/start`, { method: "POST" }),
+  pauseRun: (id: string) => apiFetch<{ ok: boolean; paused: number }>(`/admin/fleet/runs/${id}/pause`, { method: "POST" }),
+  resumeRun: (id: string) => apiFetch<{ ok: boolean; resumed: number }>(`/admin/fleet/runs/${id}/resume`, { method: "POST" }),
+  destroyRun: (id: string) => apiFetch<{ ok: boolean; destroyed: number }>(`/admin/fleet/runs/${id}/destroy`, { method: "POST" }),
+  redialRun: (id: string) => apiFetch<{ ok: boolean; status: number; body: string }>(`/admin/fleet/runs/${id}/redial`, { method: "POST" }),
+  runMonitor: (id: string) => apiFetch<RunMonitor>(`/admin/fleet/runs/${id}/monitor`),
+  // ── Inbound prewarm + pod recovery ──
+  inboundConfig: () => apiFetch<InboundPrewarmConfig>("/admin/fleet/inbound/prewarm"),
+  setInboundConfig: (b: Partial<InboundPrewarmConfig>) =>
+    apiFetch<InboundPrewarmConfig>("/admin/fleet/inbound/prewarm", { method: "PUT", body: JSON.stringify(b) }),
+  inboundPods: () => apiFetch<PodRecord[]>("/admin/fleet/inbound/pods"),
+  /** Set which of the caller's numbers route to this inbound pod (full set-operation —
+   *  numbers not in the list are detached). Calls to a pinned number run on this pod. */
+  attachPodNumbers: (podId: string, numberIds: string[]) =>
+    apiFetch<{ ok: boolean; attached: number }>(
+      `/admin/fleet/inbound/pods/${podId}/numbers`,
+      { method: "PUT", body: JSON.stringify({ numberIds }) }),
+  inboundRegistry: () => apiFetch<InboundSlot[]>("/admin/fleet/inbound/registry"),
+  reup: (podId: string) =>
+    apiFetch<{ ok: boolean; id: string; status: string }>(`/admin/fleet/pods/${podId}/reup`, { method: "POST" }),
+  reconcile: () =>
+    apiFetch<{ ok: boolean; checked: number; missing: number }>("/admin/fleet/reconcile", { method: "POST" }),
+};
