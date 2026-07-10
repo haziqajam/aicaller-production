@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
-import { Assistants, Campaigns, LeadLists, NumberLists, CampaignRuns } from "@/lib/api/resources";
+import { Assistants, Campaigns, Flows, LeadLists, NumberLists, CampaignRuns } from "@/lib/api/resources";
 import type { LeadList, NumberList } from "@/lib/api/schemas";
 import { toastApiError } from "@/lib/api/errors";
 import { getRole } from "@/lib/auth";
@@ -48,12 +48,13 @@ import {
   TimerIcon,
   RepeatIcon,
   SaveIcon,
+  WorkflowIcon,
   type LucideIcon,
 } from "lucide-react";
 
 // Step definitions — label + icon, kept in lockstep with StepIndex.
 const STEPS = [
-  { label: "Assistant", icon: BotIcon },
+  { label: "Agent", icon: BotIcon },
   { label: "Leads", icon: UsersIcon },
   { label: "Numbers", icon: PhoneOutgoingIcon },
   { label: "Pacing", icon: GaugeIcon },
@@ -106,7 +107,11 @@ function SectionHeader({
 }
 
 type WizardState = {
+  // The agent driving each call: an Assistant (default) OR a Pipecat Flow —
+  // exactly one is sent to the backend (assistantId XOR flowId).
+  agentType: "assistant" | "flow";
   assistantId: string;
+  flowId: string;
   listId: string;
   // The campaign now dials FROM a reusable number list (a pool of the user's
   // numbers), optionally rotating across them. The backend derives the campaign's
@@ -159,45 +164,91 @@ function StepIndicator({ current }: { current: StepIndex }) {
   );
 }
 
-// Step 1: Select assistant
-function StepAssistant({
-  value,
-  onChange,
+// Step 1: Select the agent — an Assistant (default) or a Pipecat Flow.
+function StepAgent({
+  agentType,
+  assistantId,
+  flowId,
+  onTypeChange,
+  onAssistantChange,
+  onFlowChange,
 }: {
-  value: string;
-  onChange: (id: string) => void;
+  agentType: "assistant" | "flow";
+  assistantId: string;
+  flowId: string;
+  onTypeChange: (t: "assistant" | "flow") => void;
+  onAssistantChange: (id: string) => void;
+  onFlowChange: (id: string) => void;
 }) {
-  const { data: assistants, isLoading } = useQuery({
+  const { data: assistants, isLoading: loadingAssistants } = useQuery({
     queryKey: ["assistants"],
     queryFn: Assistants.list,
   });
+  const { data: flows, isLoading: loadingFlows } = useQuery({
+    queryKey: ["flows"],
+    queryFn: Flows.list,
+  });
 
-  if (isLoading) {
-    return (
-      <div className="space-y-2">
-        <Skeleton className="h-4 w-32" />
-        <Skeleton className="h-9 w-full" />
-      </div>
-    );
-  }
-
-  const list = assistants ?? [];
+  const isFlow = agentType === "flow";
+  const isLoading = isFlow ? loadingFlows : loadingAssistants;
+  const value = isFlow ? flowId : assistantId;
+  const list = isFlow ? (flows ?? []) : (assistants ?? []);
+  const selectedName = list.find((x) => (x.id ?? x.name) === value)?.name ?? value;
+  const Icon = isFlow ? WorkflowIcon : BotIcon;
 
   return (
     <div className="space-y-3">
-      {list.length === 0 ? (
+      {/* Agent type toggle (mirrors the direction toggle in the call dialog). */}
+      <div className="grid grid-cols-2 gap-2">
+        {([
+          { v: "assistant", label: "Assistant", icon: BotIcon, hint: "Single prompt + tools" },
+          { v: "flow", label: "Flow", icon: WorkflowIcon, hint: "Structured conversation graph" },
+        ] as const).map(({ v, label, icon: TIcon, hint }) => {
+          const on = agentType === v;
+          return (
+            <button
+              key={v}
+              type="button"
+              onClick={() => onTypeChange(v)}
+              aria-pressed={on}
+              title={hint}
+              className={cn(
+                "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
+                on
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border bg-background text-foreground hover:bg-muted",
+              )}
+            >
+              <TIcon className="size-4 shrink-0" aria-hidden />
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-2">
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-9 w-full" />
+        </div>
+      ) : list.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No assistants found. Create one in the Assistants section first.
+          {isFlow
+            ? "No flows found. Create one in the Flows section first."
+            : "No assistants found. Create one in the Assistants section first."}
         </p>
       ) : (
-        <Select value={value || null} onValueChange={(v) => onChange(v ?? "")}>
+        <Select
+          value={value || null}
+          onValueChange={(v) => (isFlow ? onFlowChange(v ?? "") : onAssistantChange(v ?? ""))}
+        >
           <SelectTrigger className="w-full">
-            <SelectValue placeholder="Select an assistant…" />
+            <SelectValue placeholder={isFlow ? "Select a flow…" : "Select an assistant…"} />
           </SelectTrigger>
           <SelectContent>
             {list.map((a) => (
               <SelectItem key={a.id ?? a.name} value={a.id ?? a.name}>
-                <BotIcon className="size-3.5 text-muted-foreground" />
+                <Icon className="size-3.5 text-muted-foreground" />
                 {a.name}
               </SelectItem>
             ))}
@@ -206,12 +257,10 @@ function StepAssistant({
       )}
       {value && (
         <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-          <BotIcon className="size-3.5 shrink-0 text-primary" aria-hidden />
+          <Icon className="size-3.5 shrink-0 text-primary" aria-hidden />
           <span>
             Selected:{" "}
-            <span className="font-medium text-foreground">
-              {list.find((a) => (a.id ?? a.name) === value)?.name ?? value}
-            </span>
+            <span className="font-medium text-foreground">{selectedName}</span>
           </span>
         </div>
       )}
@@ -535,6 +584,7 @@ function StepReview({
   numberListLabel: string;
   summary: string;
 }) {
+  const isFlow = state.agentType === "flow";
   return (
     <div className="space-y-4">
       {/* Summary banner */}
@@ -545,9 +595,9 @@ function StepReview({
       {/* Detail rows */}
       <div className="divide-y divide-border rounded-lg border border-border text-sm overflow-hidden">
         <ReviewRow
-          icon={BotIcon}
-          label="Assistant"
-          value={assistantName || state.assistantId}
+          icon={isFlow ? WorkflowIcon : BotIcon}
+          label={isFlow ? "Flow" : "Assistant"}
+          value={assistantName || (isFlow ? state.flowId : state.assistantId)}
         />
         <ReviewRow
           icon={UsersIcon}
@@ -616,8 +666,9 @@ const STEP_HEADERS: {
 }[] = [
   {
     icon: BotIcon,
-    title: "Choose an assistant",
-    description: "The AI agent that will conduct the calls in this campaign.",
+    title: "Choose the agent",
+    description:
+      "The AI that conducts each call: an assistant (single prompt + tools) or a flow (structured conversation graph).",
     tone: "cyan",
   },
   {
@@ -662,7 +713,9 @@ export function CampaignWizard() {
   const isAdmin = mounted ? getRole() === "admin" : false;
 
   const [state, setState] = React.useState<WizardState>({
+    agentType: "assistant",
     assistantId: "",
+    flowId: "",
     listId: "",
     numberListId: "",
     rotateNumbers: false,
@@ -671,10 +724,15 @@ export function CampaignWizard() {
     maxCallDuration: 900,
   });
 
-  // Fetch assistants for review step name lookup
+  // Fetch assistants/flows for review step name lookup
   const { data: assistants } = useQuery({
     queryKey: ["assistants"],
     queryFn: Assistants.list,
+    enabled: step >= 4,
+  });
+  const { data: flowsForReview } = useQuery({
+    queryKey: ["flows"],
+    queryFn: Flows.list,
     enabled: step >= 4,
   });
 
@@ -690,9 +748,13 @@ export function CampaignWizard() {
     queryFn: NumberLists.list,
   });
 
-  const assistantName =
-    assistants?.find((a) => (a.id ?? a.name) === state.assistantId)?.name ??
-    state.assistantId;
+  const isFlowAgent = state.agentType === "flow";
+  const agentId = isFlowAgent ? state.flowId : state.assistantId;
+  const assistantName = isFlowAgent
+    ? (flowsForReview?.find((f) => (f.id ?? f.name) === state.flowId)?.name ??
+       state.flowId)
+    : (assistants?.find((a) => (a.id ?? a.name) === state.assistantId)?.name ??
+       state.assistantId);
 
   const chosenList = leadLists?.find((l) => l.id === state.listId);
   const totalLeadCount = chosenList?.leadCount ?? 0;
@@ -703,7 +765,7 @@ export function CampaignWizard() {
     : "—";
 
   const summary =
-    totalLeadCount > 0 && state.numberListId && state.assistantId
+    totalLeadCount > 0 && state.numberListId && agentId
       ? pacingSummary({
           leadCount: totalLeadCount,
           fromNumber: chosenNumberList?.name ?? "your number list",
@@ -716,7 +778,7 @@ export function CampaignWizard() {
 
   // Step validation
   function canAdvance(): boolean {
-    if (step === 0) return Boolean(state.assistantId);
+    if (step === 0) return Boolean(agentId);
     if (step === 1) return Boolean(state.listId);
     if (step === 2) return Boolean(state.numberListId);
     if (step === 3) return true; // pacing always valid within constraints
@@ -735,7 +797,9 @@ export function CampaignWizard() {
   // list's first member. A freshly created campaign has status "draft".
   function campaignPayload() {
     return {
-      assistantId: state.assistantId,
+      // Exactly one agent reference — the backend rejects both/neither.
+      assistantId: isFlowAgent ? undefined : state.assistantId,
+      flowId: isFlowAgent ? state.flowId : undefined,
       leadIds: [] as string[],
       listId: state.listId,
       numberListId: state.numberListId,
@@ -811,9 +875,13 @@ export function CampaignWizard() {
         </CardHeader>
         <CardContent className="space-y-4">
           {step === 0 && (
-            <StepAssistant
-              value={state.assistantId}
-              onChange={(id) => setState((s) => ({ ...s, assistantId: id }))}
+            <StepAgent
+              agentType={state.agentType}
+              assistantId={state.assistantId}
+              flowId={state.flowId}
+              onTypeChange={(t) => setState((s) => ({ ...s, agentType: t }))}
+              onAssistantChange={(id) => setState((s) => ({ ...s, assistantId: id }))}
+              onFlowChange={(id) => setState((s) => ({ ...s, flowId: id }))}
             />
           )}
           {step === 1 && (

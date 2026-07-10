@@ -4,7 +4,7 @@ import { use, useState } from "react";
 import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Campaigns, CampaignRuns, Assistants, LeadLists } from "@/lib/api/resources";
+import { Campaigns, CampaignRuns, Assistants, Flows, LeadLists } from "@/lib/api/resources";
 import { toastApiError, parseApiError } from "@/lib/api/errors";
 import { POLL } from "@/lib/query";
 import { StatusChip } from "@/components/status-chip";
@@ -177,7 +177,17 @@ export default function CampaignProgressPage({
     enabled: Boolean(campaign?.listId),
   });
 
-  const assistantName = campaign?.assistantId
+  // Flow campaigns reference a Pipecat Flow instead of an assistant — resolve
+  // whichever agent drives this campaign for the header label.
+  const { data: flowsForName } = useQuery({
+    queryKey: ["flows"],
+    queryFn: Flows.list,
+    enabled: Boolean(campaign?.flowId),
+  });
+  const assistantName = campaign?.flowId
+    ? flowsForName?.find((f) => f.id === campaign.flowId)?.name ??
+      `${String(campaign.flowId).slice(0, 8)}…`
+    : campaign?.assistantId
     ? assistants?.find((a) => a.id === campaign.assistantId)?.name ??
       `${campaign.assistantId.slice(0, 8)}…`
     : "—";
@@ -402,7 +412,7 @@ export default function CampaignProgressPage({
           {campaign && (
             <CampaignAnalysisCard
               campaignId={id}
-              assistantId={campaign.assistantId}
+              assistantId={campaign.assistantId ?? undefined}
             />
           )}
 

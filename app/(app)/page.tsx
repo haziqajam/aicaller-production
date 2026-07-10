@@ -34,7 +34,8 @@ type CallRecord = {
 
 type CampaignRecord = {
   id?: string;
-  assistantId?: string;
+  assistantId?: string | null;
+  flowId?: string | null;
   fromNumber?: string;
   status?: string;
 };

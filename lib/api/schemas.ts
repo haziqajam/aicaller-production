@@ -208,9 +208,163 @@ export const assistantSchema = z.object({
 });
 export type Assistant = z.infer<typeof assistantSchema>;
 
+// ─── Pipecat Flows ────────────────────────────────────────────────────────────
+// A Flow is a parallel agent type alongside Assistants: a node graph (per-node
+// task messages, function transitions, actions) + its own service configs.
+// Mirrors caller/models.py (Flow/FlowNode/FlowFunctionDef/FlowAction/FlowMessage)
+// and the structural rules in caller/flow_runtime.validate_flow_definition, so
+// errors surface inline before the backend 400s.
+export const FLOW_LIMITS = {
+  name: 120,
+  description: 2000,
+  nodeName: 80,
+  nodes: 50,
+  messageContent: 10000,
+  functionName: 64,
+  functionDescription: 2000,
+  functions: 20,
+  parameters: 20,
+  actions: 5,
+  actionText: 2000,
+  roleMessages: 5,
+  taskMessages: 10,
+} as const;
+
+export const flowMessageSchema = z.object({
+  role: z.enum(["system", "user", "assistant"]).default("system"),
+  content: z.string().min(1, "Message is required").max(FLOW_LIMITS.messageContent),
+});
+export type FlowMessage = z.infer<typeof flowMessageSchema>;
+
+export const flowFunctionSchema = z.object({
+  name: z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/, "Use a valid function name (no spaces)"),
+  description: z.string().max(FLOW_LIMITS.functionDescription).default(""),
+  // transition = pure edge; collect = store args into flow state; http_tool =
+  // run one of the owner's reusable HTTP Tools; transfer = hand the caller to
+  // a human (real Twilio redirect on phone calls, simulated in browser tests —
+  // target/announcement come from the flow's Call features → Transfer).
+  kind: z.enum(["transition", "collect", "http_tool", "transfer"]).default("transition"),
+  parameters: z.array(toolParam).max(FLOW_LIMITS.parameters).default([]),
+  // Target node name. Required for kind=transition (checked in superRefine —
+  // node names live at the flow level). Base UI Selects hold null when unset.
+  transition_to: z.string().nullish(),
+  toolId: z.string().nullish(),   // kind=http_tool
+  stateKey: z.string().nullish(), // kind=collect (defaults to name server-side)
+});
+export type FlowFunction = z.infer<typeof flowFunctionSchema>;
+
+export const flowActionSchema = z.object({
+  type: z.enum(["tts_say", "end_conversation"]),
+  text: z.string().max(FLOW_LIMITS.actionText).default(""),
+});
+export type FlowAction = z.infer<typeof flowActionSchema>;
+
+export const flowNodeSchema = z.object({
+  name: z.string().min(1, "Node name is required").max(FLOW_LIMITS.nodeName),
+  role_messages: z.array(flowMessageSchema).max(FLOW_LIMITS.roleMessages).default([]),
+  task_messages: z.array(flowMessageSchema)
+    .min(1, "At least one task message is required")
+    .max(FLOW_LIMITS.taskMessages),
+  functions: z.array(flowFunctionSchema).max(FLOW_LIMITS.functions).default([]),
+  pre_actions: z.array(flowActionSchema).max(FLOW_LIMITS.actions).default([]),
+  post_actions: z.array(flowActionSchema).max(FLOW_LIMITS.actions).default([]),
+  // append = keep context across the transition; reset = fresh context here.
+  context_strategy: z.enum(["append", "reset"]).default("append"),
+  // On the initial node this is the greeting toggle (bot speaks first or waits).
+  respond_immediately: z.boolean().default(true),
+});
+export type FlowNode = z.infer<typeof flowNodeSchema>;
+
+export const flowSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1, "Name is required").max(FLOW_LIMITS.name),
+  description: z.string().max(FLOW_LIMITS.description).default(""),
+  initial_node: z.string().min(1, "Pick a starting node"),
+  nodes: z.array(flowNodeSchema).min(1, "Add at least one node").max(FLOW_LIMITS.nodes),
+  allowInterruptions: z.boolean().default(true),
+  llm: llmConfig.default(() => ({ provider: "openai" as const, model: "gpt-4.1-mini" })),
+  stt: sttConfig.default(() => ({ engine: "deepgram" as const, language: "en" })),
+  tts: ttsConfig.default(() => ({ engine: "kokoro" as const, voice: "af_heart", speed: 1 })),
+  idle: idleConfig.default(() => ({ timeout: 5, maxRetries: 2, holdMaxSec: 30 })),
+  vad: vadConfig.default(() => ({ responsiveness: "balanced" as const })),
+  // Call features — parity with assistants. Transfer feeds node-level
+  // `transfer` functions; voicemail/IVR are phone-call-only (inert in the
+  // browser test).
+  transfer: transferConfig.default(() => ({ enabled: false, announcement: "", triggerPhrase: "", targets: [] })),
+  voicemail: voicemailConfig.default(() => ({
+    enabled: false,
+    message: "Sorry we couldn't reach you. Please call us back at your convenience. Thank you.",
+    responseDelay: 2,
+  })),
+  ivr: ivrConfig.default(() => ({ enabled: false, navigationPrompt: "" })),
+  created_at: z.string().optional(),
+}).superRefine((flow, ctx) => {
+  // A transfer function needs a flow-level target number (mirrors the backend).
+  const hasTarget = Boolean(flow.transfer?.targets?.[0]?.number?.trim());
+  flow.nodes.forEach((node, ni) => {
+    node.functions.forEach((fn, fi) => {
+      if (fn.kind === "transfer" && !hasTarget) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["nodes", ni, "functions", fi, "kind"],
+          message: "Set a transfer number under Call features first",
+        });
+      }
+    });
+  });
+  // Mirror caller/flow_runtime.validate_flow_definition so the graph problems
+  // surface inline at save time instead of as a backend 400.
+  const names = flow.nodes.map((n) => n.name);
+  const nameSet = new Set(names);
+  const dupes = names.filter((n, i) => names.indexOf(n) !== i);
+  if (dupes.length) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["nodes"],
+      message: `Duplicate node names: ${[...new Set(dupes)].join(", ")}`,
+    });
+  }
+  if (flow.initial_node && !nameSet.has(flow.initial_node)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["initial_node"],
+      message: `Starting node "${flow.initial_node}" doesn't exist`,
+    });
+  }
+  flow.nodes.forEach((node, ni) => {
+    node.functions.forEach((fn, fi) => {
+      if (fn.transition_to && !nameSet.has(fn.transition_to)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["nodes", ni, "functions", fi, "transition_to"],
+          message: `Target node "${fn.transition_to}" doesn't exist`,
+        });
+      }
+      if (fn.kind === "transition" && !fn.transition_to) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["nodes", ni, "functions", fi, "transition_to"],
+          message: "A transition needs a target node",
+        });
+      }
+      if (fn.kind === "http_tool" && !fn.toolId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["nodes", ni, "functions", fi, "toolId"],
+          message: "Pick the tool to call",
+        });
+      }
+    });
+  });
+});
+export type Flow = z.infer<typeof flowSchema>;
+
 export const campaignSchema = z.object({
   id: z.string().optional(),
-  assistantId: z.string().min(1),
+  // The agent driving each call: EXACTLY ONE of assistantId / flowId (mirrors
+  // the backend create-route rule). Assistant campaigns are unchanged.
+  assistantId: z.string().nullish(),
+  flowId: z.string().nullish(),
   // Primary / fallback caller ID. Optional now: when a numberListId is chosen the
   // backend derives this from the list's first member, so the wizard need not send
   // it. Existing single-number campaigns still set it directly.
@@ -226,5 +380,13 @@ export const campaignSchema = z.object({
   delayBetweenCalls: z.number().min(0).default(0),
   maxCallDuration: z.number().int().min(10).default(900),
   created_at: z.string().optional(),
+}).superRefine((c, ctx) => {
+  if (Boolean(c.assistantId) === Boolean(c.flowId)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["assistantId"],
+      message: "Pick exactly one agent: an assistant or a flow",
+    });
+  }
 });
 export type Campaign = z.infer<typeof campaignSchema>;

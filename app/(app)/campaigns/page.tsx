@@ -8,6 +8,7 @@ import { useQueryState, parseAsString } from "nuqs";
 import {
   Campaigns,
   Assistants,
+  Flows,
   LeadLists,
   type Paginated,
 } from "@/lib/api/resources";
@@ -31,6 +32,7 @@ import {
   MegaphoneIcon,
   PlusIcon,
   BotIcon,
+  WorkflowIcon,
   PhoneOutgoingIcon,
   UsersIcon,
   GaugeIcon,
@@ -39,7 +41,9 @@ import {
 
 type CampaignRecord = {
   id?: string;
-  assistantId?: string;
+  assistantId?: string | null;
+  // Flow campaigns reference a Pipecat Flow instead of an assistant.
+  flowId?: string | null;
   fromNumber?: string;
   concurrency?: number;
   status?: string;
@@ -162,10 +166,14 @@ function CampaignsContent() {
     placeholderData: keepPreviousData,
   });
 
-  // Resolve assistant ObjectIds → human names for the table.
+  // Resolve assistant/flow ObjectIds → human names for the table.
   const { data: assistants } = useQuery({
     queryKey: ["assistants"],
     queryFn: Assistants.list,
+  });
+  const { data: flows } = useQuery({
+    queryKey: ["flows"],
+    queryFn: Flows.list,
   });
 
   // Lead lists resolve the lead count for list-backed campaigns (which carry a
@@ -188,9 +196,21 @@ function CampaignsContent() {
       .map((l) => [l.id as string, l.leadCount ?? 0])
   );
 
-  function resolveAssistant(id?: string): string {
+  const flowNames = new Map<string, string>(
+    (flows ?? [])
+      .filter((f) => f.id)
+      .map((f) => [f.id as string, f.name])
+  );
+
+  function resolveAssistant(id?: string | null): string {
     if (!id) return "—";
     return assistantNames.get(id) ?? `${id.slice(0, 8)}…`;
+  }
+
+  /** Agent label: the flow's name for flow campaigns, else the assistant's. */
+  function resolveAgent(c: CampaignRecord): string {
+    if (c.flowId) return flowNames.get(c.flowId) ?? `${c.flowId.slice(0, 8)}…`;
+    return resolveAssistant(c.assistantId);
   }
 
   function resolveLeadCount(c: CampaignRecord): number {
@@ -337,7 +357,7 @@ function CampaignsContent() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <HeaderCell>Assistant</HeaderCell>
+                  <HeaderCell>Agent</HeaderCell>
                   <HeaderCell>From</HeaderCell>
                   <HeaderCell>Leads</HeaderCell>
                   <HeaderCell>Concurrency</HeaderCell>
@@ -362,10 +382,14 @@ function CampaignsContent() {
                     <TableCell>
                       <span className="flex items-center gap-2 text-sm text-foreground">
                         <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-primary/10">
-                          <BotIcon className="size-3.5 text-primary" aria-hidden />
+                          {c.flowId ? (
+                            <WorkflowIcon className="size-3.5 text-primary" aria-hidden />
+                          ) : (
+                            <BotIcon className="size-3.5 text-primary" aria-hidden />
+                          )}
                         </span>
                         <span className="truncate font-medium">
-                          {resolveAssistant(c.assistantId)}
+                          {resolveAgent(c)}
                         </span>
                       </span>
                     </TableCell>

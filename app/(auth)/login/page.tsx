@@ -1,11 +1,11 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Auth } from "@/lib/api/resources";
 import { ApiError } from "@/lib/api/client";
 import { parseApiError } from "@/lib/api/errors";
-import { setSession } from "@/lib/auth";
+import { clearSession, setSession } from "@/lib/auth";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { PhoneCallIcon } from "lucide-react";
@@ -17,6 +17,14 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Reaching the login page means the session (if any) is dead — clear BOTH
+  // stores so the proxy's cookie check can't bounce us straight back to "/"
+  // while apiFetch's expired localStorage token 401s "/" back here (the
+  // constantly-refreshing login loop). Makes /login a stable sink.
+  useEffect(() => {
+    clearSession();
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();

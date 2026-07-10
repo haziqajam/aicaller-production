@@ -35,6 +35,7 @@ import {
   PhoneCallIcon,
   ShieldIcon,
   LayoutDashboardIcon,
+  WorkflowIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -42,6 +43,7 @@ import { cn } from "@/lib/utils";
 const NAV_ICONS: Record<string, React.ElementType> = {
   "/dashboard": LayoutDashboardIcon,
   "/assistants": BotIcon,
+  "/flows": WorkflowIcon,
   "/numbers": PhoneIcon,
   "/inbound": PhoneIncomingIcon,
   "/leads": UsersIcon,

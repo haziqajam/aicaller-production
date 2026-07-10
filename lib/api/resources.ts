@@ -1,6 +1,6 @@
 import { apiFetch } from "./client";
 import type {
-  Assistant, Campaign, Tool, Lead, LeadList, NumberList, NumberListMember,
+  Assistant, Campaign, Flow, Tool, Lead, LeadList, NumberList, NumberListMember,
 } from "./schemas";
 
 // Server-side pagination envelope. Endpoints converted to true (DB-level) paging
@@ -127,6 +127,19 @@ export const Outbound = {
   call: (body: { assistantId: string; to: string; fromNumber?: string; maxCallDuration?: number }) =>
     apiFetch<{ callSid: string; status: string; to: string; fromNumber: string }>(
       "/outbound-call", { method: "POST", body: JSON.stringify(body) }),
+};
+
+// Pipecat Flows — a parallel agent type alongside Assistants. Same CRUD shape;
+// tested in the browser via /ws-flow (see FlowCallDialog) and attachable to
+// campaigns via campaign.flowId.
+export const Flows = {
+  list: () => apiFetch<Flow[]>("/flows"),
+  get: (id: string) => apiFetch<Flow>(`/flows/${id}`),
+  create: (f: Flow) => apiFetch<{ id: string }>("/flows",
+    { method: "POST", body: JSON.stringify(f) }),
+  update: (id: string, f: Flow) => apiFetch(`/flows/${id}`,
+    { method: "PUT", body: JSON.stringify(f) }),
+  remove: (id: string) => apiFetch(`/flows/${id}`, { method: "DELETE" }),
 };
 
 export const Tools = {
