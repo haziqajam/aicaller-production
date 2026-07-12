@@ -30,6 +30,17 @@ import {
 // The preview always searches this full catalog so every candidate machine shows
 // in the offers table; the admin then multi-selects specific offers by cost.
 const OFFER_CATALOG = "RTX 5060 Ti,RTX 5070 Ti,RTX 5080,RTX 5090";
+
+// Same image, two registries. GHCR has no anonymous pull quota (Docker Hub:
+// 10 pulls/hr per shared datacenter IP — large pulls stall in retry loops).
+const REGISTRY_IMAGES = {
+  ghcr: "ghcr.io/haziqajam/aicaller-backend-5090:latest",
+  dockerhub: "absar12/aicaller-backend-5090:latest",
+} as const;
+const REGISTRY_LABELS: Record<keyof typeof REGISTRY_IMAGES, string> = {
+  ghcr: "GHCR (GitHub) — no pull throttling",
+  dockerhub: "Docker Hub — anonymous pulls throttled",
+};
 const REGIONS = [
   { value: "any", label: "Any region" },
   { value: "US", label: "United States" },
@@ -71,6 +82,10 @@ export function LaunchFleetDialog({
   // Launch behavior (default on = today's behavior: dial on boot, reap on drain).
   const [autoStart, setAutoStart] = React.useState(true);
   const [autoDestroy, setAutoDestroy] = React.useState(true);
+  // Registry the pods pull the backend image from. GHCR mirrors the same image
+  // but has no anonymous pull throttling (Docker Hub allows only 10 anonymous
+  // pulls/hour per shared datacenter IP, which stalls/kills large pulls).
+  const [registry, setRegistry] = React.useState<"ghcr" | "dockerhub">("ghcr");
 
   // Reset to a clean slate on each open transition (render-time state sync — the
   // React-recommended alternative to a setState-in-effect, guarded so it runs once).
@@ -171,6 +186,7 @@ export function LaunchFleetDialog({
       campaignId, pods, concurrency,
       gpus: targetModels.join(",") || undefined, region: region_, maxPrice: effectiveCap,
       autoStart, autoDestroy,
+      podImage: REGISTRY_IMAGES[registry],
     }) as Promise<LaunchResult>,
     onSuccess: (r) => {
       toast.success(`Deploying — provisioning ${r.chosenPods ?? pods} pod(s)`);
@@ -353,6 +369,26 @@ export function LaunchFleetDialog({
                     Leave the cap blank to derive it from the machines you select above. Set it to
                     filter the offer list and hard-cap spend regardless of selection.
                   </p>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">Image registry</label>
+                    <Select
+                      items={REGISTRY_LABELS}
+                      value={registry}
+                      onValueChange={(v) => setRegistry((v ?? "ghcr") as "ghcr" | "dockerhub")}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="ghcr">{REGISTRY_LABELS.ghcr}</SelectItem>
+                        <SelectItem value="dockerhub">{REGISTRY_LABELS.dockerhub}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Where pods pull the backend image from. Same image either way —{" "}
+                      <span className="font-mono text-[10px]">{REGISTRY_IMAGES[registry]}</span>
+                    </p>
+                  </div>
                 </div>
               )}
             </div>

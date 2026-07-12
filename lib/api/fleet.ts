@@ -176,6 +176,9 @@ export type LaunchBody = {
   autoStart?: boolean;
   autoDestroy?: boolean;
   dryRun?: boolean;
+  /** Pod image override — pick the registry per launch (GHCR mirror vs Docker
+   *  Hub). Empty/omitted → the backend's FLEET_VAST_POD_IMAGE default. */
+  podImage?: string;
 };
 export type LaunchDryRun = {
   dryRun: true;
