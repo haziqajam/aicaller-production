@@ -179,6 +179,14 @@ export type LaunchBody = {
   /** Pod image override — pick the registry per launch (GHCR mirror vs Docker
    *  Hub). Empty/omitted → the backend's FLEET_VAST_POD_IMAGE default. */
   podImage?: string;
+  /** EXTRA Ollama models each pod pulls at boot (weights are no longer baked in
+   *  the image). The campaign assistant/flow's own Ollama model is always pulled
+   *  automatically — list additional ones here. Each adds a multi-GB download to
+   *  pod boot; pods only report ready (and dial) after pulls finish. */
+  ollamaModels?: string[];
+  /** EXTRA faster-whisper sizes each pod prefetches at boot (the assistant's own
+   *  whisper_local size + the default size are always prefetched automatically). */
+  whisperModels?: string[];
 };
 export type LaunchDryRun = {
   dryRun: true;

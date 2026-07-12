@@ -22,6 +22,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { OfferTable } from "@/components/fleet/offer-table";
+import { REGIONS } from "@/components/fleet/regions";
 import {
   RocketIcon, RefreshCwIcon, Loader2Icon, UsersIcon, BotIcon,
   TriangleAlertIcon, ChevronDownIcon, SlidersHorizontalIcon,
@@ -41,14 +42,6 @@ const REGISTRY_LABELS: Record<keyof typeof REGISTRY_IMAGES, string> = {
   ghcr: "GHCR (GitHub) — no pull throttling",
   dockerhub: "Docker Hub — anonymous pulls throttled",
 };
-const REGIONS = [
-  { value: "any", label: "Any region" },
-  { value: "US", label: "United States" },
-  { value: "CA", label: "Canada" },
-  { value: "GB", label: "United Kingdom" },
-  { value: "DE", label: "Germany" },
-  { value: "FR", label: "France" },
-];
 
 function fmtCampaign(c: FleetCampaign): string {
   const who = c.ownerEmail ?? c.ownerId ?? "unknown";
@@ -86,6 +79,10 @@ export function LaunchFleetDialog({
   // but has no anonymous pull throttling (Docker Hub allows only 10 anonymous
   // pulls/hour per shared datacenter IP, which stalls/kills large pulls).
   const [registry, setRegistry] = React.useState<"ghcr" | "dockerhub">("ghcr");
+  // EXTRA Ollama models each pod pulls at boot (comma-separated). Model weights
+  // are no longer baked in the image; the campaign assistant's own Ollama model
+  // is ALWAYS pulled automatically, so this stays empty in the common case.
+  const [ollamaModels, setOllamaModels] = React.useState("");
 
   // Reset to a clean slate on each open transition (render-time state sync — the
   // React-recommended alternative to a setState-in-effect, guarded so it runs once).
@@ -99,6 +96,7 @@ export function LaunchFleetDialog({
       setSelectedOfferIds(new Set());
       setAutoStart(true);
       setAutoDestroy(true);
+      setOllamaModels("");
     }
   }
 
@@ -181,12 +179,16 @@ export function LaunchFleetDialog({
   const estHoursForPods = rec && pods > 0 ? (rec.estHours * rec.recommendedPods) / pods : null;
   const estSpend = cheapest != null && gpuHours != null ? cheapest * gpuHours : null;
 
+  const extraOllamaModels = ollamaModels
+    .split(",").map((m) => m.trim()).filter(Boolean);
+
   const deploy = useMutation({
     mutationFn: () => Fleet.launch({
       campaignId, pods, concurrency,
       gpus: targetModels.join(",") || undefined, region: region_, maxPrice: effectiveCap,
       autoStart, autoDestroy,
       podImage: REGISTRY_IMAGES[registry],
+      ollamaModels: extraOllamaModels.length ? extraOllamaModels : undefined,
     }) as Promise<LaunchResult>,
     onSuccess: (r) => {
       toast.success(`Deploying — provisioning ${r.chosenPods ?? pods} pod(s)`);
@@ -387,6 +389,17 @@ export function LaunchFleetDialog({
                     <p className="text-xs text-muted-foreground">
                       Where pods pull the backend image from. Same image either way —{" "}
                       <span className="font-mono text-[10px]">{REGISTRY_IMAGES[registry]}</span>
+                    </p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">Extra Ollama models to pull on boot</label>
+                    <Input value={ollamaModels} placeholder="e.g. gemma4:e2b, qwen3.5:9b"
+                      onChange={(e) => setOllamaModels(e.target.value)} />
+                    <p className="text-xs text-muted-foreground">
+                      Model weights aren&apos;t baked in the image anymore — each pod downloads what
+                      it needs at boot. The campaign assistant&apos;s own Ollama model is pulled
+                      automatically; list extra ones here (comma-separated). Each adds a multi-GB
+                      download to pod boot, and pods only start dialing after pulls finish.
                     </p>
                   </div>
                 </div>

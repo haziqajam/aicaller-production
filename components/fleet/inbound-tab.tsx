@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { PodStatusBadge } from "@/components/fleet/pod-status-badge";
 import { OfferTable } from "@/components/fleet/offer-table";
+import { REGIONS, regionLabel } from "@/components/fleet/regions";
 import { PodActions } from "@/components/fleet/pod-actions";
 import { AttachPodNumbersDialog } from "@/components/fleet/attach-pod-numbers-dialog";
 import { Numbers } from "@/lib/api/resources";
@@ -49,18 +50,8 @@ const OFFER_CATALOG = GPU_MODELS.join(",");
 function normalizeGpuModel(s: string): string {
   return s.trim().replace(/^NVIDIA\s+GeForce\s+/i, "").trim();
 }
-const REGIONS = [
-  { value: "any", label: "Any region" },
-  { value: "US", label: "United States" },
-  { value: "CA", label: "Canada" },
-  { value: "GB", label: "United Kingdom" },
-  { value: "DE", label: "Germany" },
-  { value: "FR", label: "France" },
-];
-
-function regionLabel(v: string) {
-  return REGIONS.find((r) => r.value === v)?.label ?? v;
-}
+// Region choices shared with the Deploy dialog (values may be 2-letter codes
+// or backend-expanded aliases like "EU" — see components/fleet/regions.ts).
 
 function fmtCost(n?: number) {
   return typeof n === "number" ? `$${n.toFixed(2)}` : "—";
