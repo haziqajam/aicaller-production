@@ -5,6 +5,7 @@ import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import Link from "next/link";
 import { Fleet, type FleetRun, type FleetSummary, type PodRecord, type PodSortKey } from "@/lib/api/fleet";
+import { SipTrunks, type SipTrunk, type SipPod } from "@/lib/api/sip-trunks";
 import { toastApiError } from "@/lib/api/errors";
 import { getRole } from "@/lib/auth";
 import { cn } from "@/lib/utils";
@@ -37,7 +38,7 @@ import {
   WalletIcon, ActivityIcon,
   RocketIcon, PlayIcon, PauseIcon, RotateCcwIcon, ExternalLinkIcon,
   ScrollTextIcon, CopyIcon, AlertTriangleIcon,
-  ChevronUpIcon, ChevronDownIcon, ChevronsUpDownIcon, type LucideIcon,
+  ChevronUpIcon, ChevronDownIcon, ChevronsUpDownIcon, PhoneIcon, type LucideIcon,
 } from "lucide-react";
 
 function fmtCost(n?: number) {
@@ -227,6 +228,11 @@ function FleetContent() {
     placeholderData: (prev) => prev,  // keep the current page visible while refetching
   });
   const allocations = useQuery<any[]>({ queryKey: ["fleet-allocations"], queryFn: Fleet.allocations });
+  const sip = useQuery({
+    queryKey: ["sip-trunks"],
+    queryFn: SipTrunks.list,
+    refetchInterval: 5000,
+  });
 
   // Manual refresh: reconcile silent-pod removal on the backend, then invalidate
   // every fleet query so the snapshot is current. Replaces the old polling.
@@ -327,6 +333,7 @@ function FleetContent() {
           <TabsTrigger value="fleets">Fleets{activeFleetCount ? ` (${activeFleetCount})` : ""}</TabsTrigger>
           <TabsTrigger value="requests">Requests{pendingRuns.length ? ` (${pendingRuns.length})` : ""}</TabsTrigger>
           <TabsTrigger value="inbound">Inbound</TabsTrigger>
+          <TabsTrigger value="sip">SIP trunks</TabsTrigger>
           <TabsTrigger value="infra">Infrastructure</TabsTrigger>
         </TabsList>
 
@@ -371,6 +378,10 @@ function FleetContent() {
 
         <TabsContent value="inbound" className="space-y-5">
           <InboundTab active={tab === "inbound"} />
+        </TabsContent>
+
+        <TabsContent value="sip" className="space-y-5">
+          <SipTab data={sip.data} loading={sip.isLoading} />
         </TabsContent>
 
         <TabsContent value="infra" className="space-y-5">
@@ -812,6 +823,165 @@ function PodControls({
           </AlertDialogContent>
         </AlertDialog>
       )}
+    </div>
+  );
+}
+
+/** SIP trunks tab: two tables — warm SIP pods and SIP trunks. Polls every 5s via
+ *  the parent query. Renders an empty state when no trunks are provisioned yet. */
+function SipTab({
+  data, loading,
+}: { data: { trunks: SipTrunk[]; pods: SipPod[] } | undefined; loading: boolean }) {
+  const pods = data?.pods ?? [];
+  const trunks = data?.trunks ?? [];
+
+  return (
+    <div className="space-y-5">
+      {/* SIP pods */}
+      <Card>
+        <CardHeader className="pb-3">
+          <SectionHeader
+            icon={ServerIcon}
+            tone="violet"
+            title="SIP pods"
+            description="Warm GPU pods registered as SIP endpoints, ready to answer inbound SIP calls."
+          />
+        </CardHeader>
+        <CardContent className="p-0">
+          {loading && pods.length === 0 ? (
+            <Skeleton className="m-4 h-9" />
+          ) : pods.length === 0 ? (
+            <EmptyState
+              icon={ServerIcon}
+              title="No SIP pods online"
+              hint="SIP pods appear here once the inbound fleet warms them up."
+            />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Pod ID</TableHead>
+                  <TableHead>Host</TableHead>
+                  <TableHead>Asterisk addr</TableHead>
+                  <TableHead>Calls</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {pods.map((p) => (
+                  <TableRow key={p.pod_id}>
+                    <TableCell className="font-mono text-xs">
+                      <span className="block max-w-[160px] truncate" title={p.pod_id}>
+                        {p.pod_id}
+                      </span>
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">
+                      <span className="block max-w-[200px] truncate" title={p.host}>
+                        {p.host}
+                      </span>
+                    </TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">
+                      {p.as_host && p.as_port != null
+                        ? `${p.as_host}:${p.as_port}`
+                        : "—"}
+                    </TableCell>
+                    <TableCell className="tabular-nums text-xs">
+                      {p.active}/{p.cap}
+                    </TableCell>
+                    <TableCell>
+                      <span
+                        className={cn(
+                          "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium",
+                          p.status === "ready"
+                            ? "bg-emerald-500/10 text-emerald-400"
+                            : p.status === "provisioning"
+                              ? "bg-amber-500/10 text-amber-400"
+                              : "bg-muted text-muted-foreground"
+                        )}
+                      >
+                        <span className="size-1.5 rounded-full bg-current" />
+                        {p.status}
+                      </span>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* SIP trunks */}
+      <Card>
+        <CardHeader className="pb-3">
+          <SectionHeader
+            icon={PhoneIcon}
+            tone="emerald"
+            title="SIP trunks"
+            description="Per-seat SIP credentials, registration status, and active-call load."
+          />
+        </CardHeader>
+        <CardContent className="p-0">
+          {loading && trunks.length === 0 ? (
+            <Skeleton className="m-4 h-9" />
+          ) : trunks.length === 0 ? (
+            <EmptyState
+              icon={PhoneIcon}
+              title="No SIP trunks yet"
+              hint="No SIP trunks yet — enable SIP access on a seat."
+            />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>SIP username</TableHead>
+                  <TableHead>Registered</TableHead>
+                  <TableHead>Calls</TableHead>
+                  <TableHead>Pod</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {trunks.map((t) => (
+                  <TableRow key={t.seatId}>
+                    <TableCell className="text-xs font-medium">
+                      {t.name ?? <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {t.sipUsername ?? <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell>
+                      <span
+                        className={cn(
+                          "inline-flex items-center gap-1.5 text-xs",
+                          t.registered ? "text-emerald-400" : "text-muted-foreground"
+                        )}
+                        title={t.registered ? "Registered" : "Not registered"}
+                      >
+                        <span
+                          className={cn(
+                            "size-2 rounded-full",
+                            t.registered ? "bg-emerald-400" : "bg-muted-foreground/40"
+                          )}
+                        />
+                        {t.registered ? "Yes" : "No"}
+                      </span>
+                    </TableCell>
+                    <TableCell className="tabular-nums text-xs">
+                      {t.activeCalls}/{t.maxConcurrent}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">
+                      <span className="block max-w-[140px] truncate" title={t.podId ?? undefined}>
+                        {t.podId ?? "—"}
+                      </span>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

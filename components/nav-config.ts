@@ -17,6 +17,7 @@ export const NAV_GROUPS: NavGroup[] = [
   ]},
   { label: "Run", items: [
     { label: "Campaigns", href: "/campaigns" },
+    { label: "Bot seats", href: "/seats" },
     { label: "Calls", href: "/calls" },
   ]},
   { label: "Settings", items: [
