@@ -17,14 +17,24 @@ export const NAV_GROUPS: NavGroup[] = [
   ]},
   { label: "Run", items: [
     { label: "Campaigns", href: "/campaigns" },
-    { label: "Bot seats", href: "/seats" },
     { label: "Calls", href: "/calls" },
+  ]},
+  // VICIdial lives in its own section, separate from the Twilio/browser calling
+  // paths above. Seats are per-user; pools + alerts are admin-only (gated below).
+  { label: "VICIdial", items: [
+    { label: "Bot seats", href: "/seats" },
+  ]},
+  { label: "VICIdial admin", adminOnly: true, items: [
+    { label: "Pods", href: "/vicidial/pods" },
+    { label: "Pod pools", href: "/vicidial/pools" },
+    { label: "Alerts", href: "/vicidial/alerts" },
   ]},
   { label: "Settings", items: [
     { label: "Twilio accounts", href: "/settings/twilio" },
   ]},
   { label: "Admin", adminOnly: true, items: [
     { label: "Users", href: "/admin/users" },
+    { label: "Tiers", href: "/admin/tiers" },
     { label: "Phone Numbers", href: "/admin/numbers" },
     { label: "Fleet", href: "/admin/fleet" }
   ]},

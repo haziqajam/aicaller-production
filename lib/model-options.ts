@@ -13,7 +13,7 @@
 
 import type { CatalogModel, LlmProviderInfo } from "./api/catalog";
 
-export type LlmProvider = "openai" | "groq" | "ollama";
+export type LlmProvider = "openai" | "groq" | "ollama" | "openrouter";
 
 export interface ModelOption {
   /** The id sent to the provider API (caller/llm.py). */
@@ -24,7 +24,9 @@ export interface ModelOption {
   hint?: string;
 }
 
-/** Real models per provider. Ollama entries must be pulled on the Ollama host. */
+/** Real models per provider. Ollama entries must be pulled on the Ollama host.
+ *  OpenRouter models are catalog-driven (backend GET /api/catalog), so the
+ *  static list here is empty — modelsFromCatalog() will always resolve them. */
 export const MODELS_BY_PROVIDER: Record<LlmProvider, ModelOption[]> = {
   openai: [
     { value: "gpt-4.1-mini", label: "GPT-4.1 mini", hint: "Fast · low cost · default" },
@@ -42,6 +44,8 @@ export const MODELS_BY_PROVIDER: Record<LlmProvider, ModelOption[]> = {
     { value: "qwen2.5", label: "Qwen 2.5", hint: "Local · Alibaba · general" },
     { value: "llama3.1", label: "Llama 3.1", hint: "Local · Meta · general" },
   ],
+  // Catalog-driven: backend returns the tier-scoped model list via GET /api/catalog.
+  openrouter: [],
 };
 
 /** Pretty labels for the provider <Select>. */
@@ -49,6 +53,7 @@ export const PROVIDER_LABELS: Record<LlmProvider, string> = {
   openai: "OpenAI",
   groq: "Groq",
   ollama: "Ollama",
+  openrouter: "OpenRouter",
 };
 
 export function modelsForProvider(provider: string): ModelOption[] {

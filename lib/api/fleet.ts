@@ -113,6 +113,15 @@ export type PodRecord = {
   healthy?: boolean | null;
   /** Inbound routing token — join key into the inbound slot registry. */
   inboundToken?: string | null;
+  /** Per-pod concurrent-call capacity (null => inherit the global default). */
+  maxConcurrentCalls?: number | null;
+  /** Per-pod model/prewarm overrides (null => inherit the pool prewarm config). */
+  ollamaModels?: string[] | null;
+  whisperModels?: string[] | null;
+  prewarmVibeVoice?: boolean | null;
+  /** Fingerprint of the code the pod self-registered with (null on pods that predate
+   *  it). Differs from the control plane's ⇒ the pod's image is stale. */
+  codeVersion?: string | null;
 };
 
 /** Fleet-global inbound prewarm config — how much warm inbound capacity to hold. */
@@ -125,8 +134,50 @@ export type InboundPrewarmConfig = {
   busyMessage: string;
   /** Optional hard cap on $/hr for prewarmed inbound pods (null = no cap). */
   maxPrice?: number | null;
+  /** Boot-time model downloads each warm pod pulls, and whether it prewarms VibeVoice. */
+  ollamaModels?: string[];
+  whisperModels?: string[];
+  prewarmVibeVoice?: boolean;
+  /** AudioSocket TCP port for VICIdial/SIP direct connect. >0 provisions pods with the
+   *  port mapped + advertises as_host:as_port. null => inherit global; 0 => disabled. */
+  audiosocketPort?: number | null;
   updatedBy?: string | null;
   updatedAt?: string | null;
+};
+
+/** GPU × stack concurrency table (the deploy form computes ≈ N/pod from this).
+ *  `table[tier][family]` = conservative concurrent-call ceiling. Numbers are the
+ *  backend's single source of truth (caller/gpu_capacity.py). */
+export type CapacityTable = {
+  table: Record<string, Record<string, number>>;
+  smallWhisper: string[];
+  default: number;
+};
+
+/** A pod's PBX-bot roster (seats assigned to it) + capacity usage. */
+export type PodRosterBot = {
+  id: string;
+  name: string | null;
+  ownerId: string | null;
+  maxConcurrent: number;
+  activeCalls: number;
+};
+export type PodRoster = {
+  podId: string;
+  capacity: number;
+  used: number;
+  bots: PodRosterBot[];
+};
+
+/** A PBX bot (seat) across all users — the admin roster picker. */
+export type AdminSeat = {
+  id: string;
+  name: string | null;
+  ownerId: string | null;
+  ownerEmail: string | null;
+  maxConcurrent: number;
+  podId: string | null;
+  poolId: string | null;
 };
 
 /** Live inbound capacity slot — one row per warm pod's routing registration.
@@ -277,6 +328,12 @@ export const Fleet = {
   runMonitor: (id: string) => apiFetch<RunMonitor>(`/admin/fleet/runs/${id}/monitor`),
   // ── Inbound prewarm + pod recovery ──
   inboundConfig: () => apiFetch<InboundPrewarmConfig>("/admin/fleet/inbound/prewarm"),
+  /** GPU × stack concurrency table for the deploy form's live "≈ N/pod" estimate. */
+  capacityTable: () => apiFetch<CapacityTable>("/admin/fleet/capacity-table"),
+  /** The control plane's code fingerprint + the default pod image. Pods register with
+   *  their own fingerprint; a mismatch = the pod runs stale code (rebuild + push +
+   *  redeploy the image). */
+  codeVersion: () => apiFetch<{ version: string; defaultPodImage: string }>("/admin/fleet/code-version"),
   setInboundConfig: (b: Partial<InboundPrewarmConfig>) =>
     apiFetch<InboundPrewarmConfig>("/admin/fleet/inbound/prewarm", { method: "PUT", body: JSON.stringify(b) }),
   inboundPods: () => apiFetch<PodRecord[]>("/admin/fleet/inbound/pods"),
@@ -291,4 +348,33 @@ export const Fleet = {
     apiFetch<{ ok: boolean; id: string; status: string }>(`/admin/fleet/pods/${podId}/reup`, { method: "POST" }),
   reconcile: () =>
     apiFetch<{ ok: boolean; checked: number; missing: number }>("/admin/fleet/reconcile", { method: "POST" }),
+  // ── Per-pod capacity + PBX-bot roster + model overrides ──
+  setPodCapacity: (podId: string, maxConcurrentCalls: number) =>
+    apiFetch<{ ok: boolean; maxConcurrentCalls: number }>(
+      `/admin/fleet/pods/${podId}/capacity`,
+      { method: "PATCH", body: JSON.stringify({ maxConcurrentCalls }) }),
+  allSeats: (unassigned = false) =>
+    apiFetch<AdminSeat[]>(`/admin/fleet/seats${unassigned ? "?unassigned=1" : ""}`),
+  podBots: (podId: string) => apiFetch<PodRoster>(`/admin/fleet/pods/${podId}/bots`),
+  addPodBot: (podId: string, seatId: string) =>
+    apiFetch<{ ok: boolean }>(`/admin/fleet/pods/${podId}/bots`,
+      { method: "POST", body: JSON.stringify({ seatId }) }),
+  /** Attach one or more bots at once (full set-operation: listed = on this pod, others detached). */
+  setPodBots: (podId: string, seatIds: string[]) =>
+    apiFetch<{ ok: boolean; attached: number; detached: number; warning: string | null }>(
+      `/admin/fleet/pods/${podId}/bots`,
+      { method: "PUT", body: JSON.stringify({ seatIds }) }),
+  removePodBot: (podId: string, seatId: string) =>
+    apiFetch<{ ok: boolean }>(`/admin/fleet/pods/${podId}/bots/${seatId}`, { method: "DELETE" }),
+  /** Move EVERY bot rostered on this pod to another pod in one action (e.g. off a dead
+   *  pod). Capacity-checked against the target; in-flight calls are unaffected. */
+  movePodBots: (podId: string, targetPodId: string) =>
+    apiFetch<{ ok: boolean; moved: number; targetPodId: string }>(
+      `/admin/fleet/pods/${podId}/move-bots`,
+      { method: "POST", body: JSON.stringify({ targetPodId }) }),
+  setPodModels: (podId: string, b: {
+    ollamaModels?: string[]; whisperModels?: string[]; prewarmVibeVoice?: boolean;
+  }) =>
+    apiFetch<{ ok: boolean }>(`/admin/fleet/pods/${podId}/models`,
+      { method: "PATCH", body: JSON.stringify(b) }),
 };

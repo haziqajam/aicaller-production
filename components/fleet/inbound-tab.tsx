@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   Fleet, type InboundPrewarmConfig, type PodRecord,
-  type InboundSlot, type OffersPreview,
+  type InboundSlot, type OffersPreview, type CapacityTable,
 } from "@/lib/api/fleet";
 import { toastApiError } from "@/lib/api/errors";
 import { relativeTime, absoluteTime } from "@/components/assistants/card-helpers";
@@ -28,6 +28,7 @@ import { OfferTable } from "@/components/fleet/offer-table";
 import { REGIONS, regionLabel } from "@/components/fleet/regions";
 import { PodActions } from "@/components/fleet/pod-actions";
 import { AttachPodNumbersDialog } from "@/components/fleet/attach-pod-numbers-dialog";
+import { AttachPodBotsDialog } from "@/components/fleet/attach-pod-bots-dialog";
 import { Numbers } from "@/lib/api/resources";
 import { cn } from "@/lib/utils";
 import {
@@ -50,6 +51,52 @@ const OFFER_CATALOG = GPU_MODELS.join(",");
 function normalizeGpuModel(s: string): string {
   return s.trim().replace(/^NVIDIA\s+GeForce\s+/i, "").trim();
 }
+
+// Mirror of caller/gpu_capacity.py's classification — only the stable STRING rules
+// (name → family, stack → tier, which whisper sizes are "small"). The concurrency
+// NUMBERS live only on the backend (fetched via Fleet.capacityTable), so a table
+// tweak never needs a frontend change.
+function familyFromName(name: string): string | null {
+  const n = name.toLowerCase();
+  if (n.includes("5090")) return "5090";
+  if (n.includes("5080")) return "5080";
+  if (n.includes("5070")) return "5070ti";
+  if (n.includes("5060")) return "5060ti";
+  return null;
+}
+function tierForStack(whisperSmall: boolean, vibevoice: boolean): string {
+  if (vibevoice) return "vibevoice";     // heaviest TTS wins
+  return whisperSmall ? "kokoro_small" : "kokoro_med";
+}
+const SMALL_WHISPER = new Set(["tiny", "base", "small", "tiny.en", "base.en", "small.en"]);
+function isSmallWhisper(models?: string[] | null): boolean {
+  if (!models || models.length === 0) return true;   // empty → small (fastest) default
+  return models.every((m) => SMALL_WHISPER.has(m.toLowerCase()));
+}
+
+// Speech-model options → the faster-whisper CT2 ids the pod prefetches. Small keeps a
+// pod on the kokoro_small (max-concurrency) tier; the rest are kokoro_med.
+const WHISPER_OPTIONS: { id: string; label: string }[] = [
+  { id: "small", label: "Small — fastest, max concurrency" },
+  { id: "medium", label: "Medium — balanced" },
+  { id: "distil-large-v3", label: "Distil v3 — fast, accurate" },
+  { id: "distil-large-v3.5", label: "Distil v3.5 — newest" },
+  { id: "large-v3-turbo", label: "Large v3 turbo — most accurate" },
+];
+
+// Fallback mirror of caller/gpu_capacity.py GPU_STACK_CAPACITY + the default cap, so the
+// live estimate always renders real numbers even when GET /admin/fleet/capacity-table
+// isn't reachable yet (control plane not on the new code). KEEP IN SYNC with the backend
+// table — the endpoint response overrides this whenever it's available.
+const CAPACITY_TABLE_FALLBACK: CapacityTable = {
+  table: {
+    kokoro_small: { "5060ti": 8, "5070ti": 16, "5080": 18, "5090": 30 },
+    kokoro_med: { "5060ti": 5, "5070ti": 10, "5080": 11, "5090": 20 },
+    vibevoice: { "5060ti": 3, "5070ti": 6, "5080": 7, "5090": 10 },
+  },
+  smallWhisper: ["tiny", "base", "small", "tiny.en", "base.en", "small.en"],
+  default: 3,
+};
 // Region choices shared with the Deploy dialog (values may be 2-letter codes
 // or backend-expanded aliases like "EU" — see components/fleet/regions.ts).
 
@@ -165,6 +212,14 @@ export function InboundTab({ active }: { active: boolean }) {
     queryFn: Numbers.list,
     enabled: active,
   });
+  // Control-plane code fingerprint + default image — powers the boot manifest and the
+  // per-pod stale-code badge ("does this pod run the code I just built?").
+  const versionQ = useQuery({
+    queryKey: ["fleet-code-version"],
+    queryFn: Fleet.codeVersion,
+    enabled: active,
+    staleTime: 60_000,
+  });
 
   const config = configQ.data ?? null;
   const pods = React.useMemo(() => podsQ.data ?? [], [podsQ.data]);
@@ -194,6 +249,7 @@ export function InboundTab({ active }: { active: boolean }) {
         loading={configQ.isLoading}
         error={configQ.isError ? (configQ.error as Error) : null}
         onRetry={() => configQ.refetch()}
+        defaultPodImage={versionQ.data?.defaultPodImage ?? null}
       />
       <InboundPodList
         pods={pods}
@@ -204,6 +260,7 @@ export function InboundTab({ active }: { active: boolean }) {
         enabled={config?.enabled ?? false}
         target={config?.warmPods ?? 0}
         onRetry={() => podsQ.refetch()}
+        cpVersion={versionQ.data?.version ?? null}
       />
     </div>
   );
@@ -306,13 +363,15 @@ function CapacityOverview({
  * guard — the React-recommended alternative to a setState-in-effect.
  */
 function PrewarmPanel({
-  active, config, loading, error, onRetry,
+  active, config, loading, error, onRetry, defaultPodImage,
 }: {
   active: boolean;
   config: InboundPrewarmConfig | null;
   loading: boolean;
   error: Error | null;
   onRetry: () => void;
+  /** What an empty image field resolves to at provision time (FLEET_VAST_POD_IMAGE). */
+  defaultPodImage: string | null;
 }) {
   const qc = useQueryClient();
 
@@ -322,6 +381,28 @@ function PrewarmPanel({
   const [warmPods, setWarmPods] = React.useState(1);
   const [maxPrice, setMaxPrice] = React.useState("");
   const [busyMessage, setBusyMessage] = React.useState("");
+  // AudioSocket (VICIdial/SIP direct connect): when on, pods provision with a mapped
+  // TCP port and advertise as_host:as_port so SIP calls can bridge to them.
+  const [audiosocketOn, setAudiosocketOn] = React.useState(false);
+  const AUDIOSOCKET_DEFAULT_PORT = 40000;
+  // Engine STACK — drives per-pod concurrency (via the GPU × stack table). Small
+  // whisper = max concurrency; a larger whisper or VibeVoice lowers it. The whisper
+  // model is a CT2 id (see WHISPER_OPTIONS); prewarmed to N concurrent workers at boot.
+  const [whisperModel, setWhisperModel] = React.useState("small");
+  const [prewarmVibeVoice, setPrewarmVibeVoice] = React.useState(false);
+  // Docker image each pod boots — THE "did my build land?" lever. Empty = backend
+  // default (FLEET_VAST_POD_IMAGE, shown as the placeholder).
+  const [podImage, setPodImage] = React.useState("");
+
+  // GPU × stack concurrency table (numbers are the backend's source of truth). Cached;
+  // used only to render the live "≈ N/pod" estimate.
+  const capQ = useQuery({
+    queryKey: ["fleet-capacity-table"],
+    queryFn: () => Fleet.capacityTable(),
+    enabled: active,
+    staleTime: 60_000,
+  });
+  const capTable = capQ.data;
 
   // Seed local staging from server config once per config identity (render-time
   // sync, not useEffect). Re-seeds after a successful Apply refetch too.
@@ -339,6 +420,10 @@ function PrewarmPanel({
     setWarmPods(config.warmPods);
     setMaxPrice(config.maxPrice != null ? String(config.maxPrice) : "");
     setBusyMessage(config.busyMessage ?? "");
+    setAudiosocketOn((config.audiosocketPort ?? 0) > 0);
+    setWhisperModel(config.whisperModels?.[0] ?? "small");
+    setPrewarmVibeVoice(config.prewarmVibeVoice ?? false);
+    setPodImage(config.podImage ?? "");
   }
 
   const save = useMutation({
@@ -347,12 +432,18 @@ function PrewarmPanel({
     // tear down / no-op) so it never reads as a silent "settings saved".
     onSuccess: (data) => {
       const n = data.warmPods ?? 0;
+      const provisioning = data.enabled && n > 0;
       toast.success(
         !data.enabled
           ? "Prewarm off — tearing down all warm pods"
           : n > 0
             ? `Prewarm applied — provisioning ${n} pod${n === 1 ? "" : "s"} (takes ~1–2 min)`
             : "Prewarm on, but Warm pods is 0 — no capacity will come up",
+        // What's next: pods come up warm, but SIP/VICIdial calls only route once bots
+        // are rostered to a pod. Point the admin at that step so the flow reads as one.
+        provisioning && (data.audiosocketPort ?? 0) > 0
+          ? { description: "Next: once pods are ready, attach bot seats to one under VICIdial → Pods so SIP calls route to it." }
+          : undefined,
       );
       qc.invalidateQueries({ queryKey: ["fleet-inbound-config"] });
       qc.invalidateQueries({ queryKey: ["fleet-inbound-pods"] });
@@ -404,8 +495,35 @@ function PrewarmPanel({
     regionValue !== (config.region ?? null) ||
     warmPods !== config.warmPods ||
     busyMessage !== (config.busyMessage ?? "") ||
-    (maxPriceNum ?? null) !== (config.maxPrice ?? null)
+    (maxPriceNum ?? null) !== (config.maxPrice ?? null) ||
+    audiosocketOn !== ((config.audiosocketPort ?? 0) > 0) ||
+    whisperModel !== (config.whisperModels?.[0] ?? "small") ||
+    prewarmVibeVoice !== (config.prewarmVibeVoice ?? false) ||
+    (podImage.trim() || null) !== (config.podImage ?? null)
   );
+
+  // The single whisper size this pod prefetches + prewarms (N concurrent workers).
+  const whisperModels = [whisperModel];
+
+  // Resolve the capacity table: the endpoint when available, else the bundled fallback
+  // so the estimate ALWAYS shows real numbers (never "≈ 0") — even when the control
+  // plane predates the /capacity-table endpoint (permanent 404). The endpoint response
+  // overrides the fallback whenever it's available.
+  const cap = capTable ?? CAPACITY_TABLE_FALLBACK;
+
+  // Live per-pod concurrency for the chosen GPU model(s) × stack. Multiple GPU models →
+  // a min–max range (a provisioned pod could be any of them). None selected → the flat
+  // default. The pod re-derives + VRAM-clamps at boot, so this is a pre-provision estimate.
+  const tier = tierForStack(isSmallWhisper([whisperModel]), prewarmVibeVoice);
+  const perPodByModel = gpuModels.map((m) => {
+    const fam = familyFromName(m);
+    return (fam ? cap.table[tier]?.[fam] : undefined) ?? cap.default;
+  });
+  const perPodMin = perPodByModel.length ? Math.min(...perPodByModel) : cap.default;
+  const perPodMax = perPodByModel.length ? Math.max(...perPodByModel) : cap.default;
+  const perPodLabel = perPodMin === perPodMax ? String(perPodMin) : `${perPodMin}–${perPodMax}`;
+  const totalMin = perPodMin * warmPods;
+  const totalMax = perPodMax * warmPods;
 
   // Apply is a PROVISION action, not a settings save — gate it on whether the staged
   // config can actually DO something, not on whether it changed (change-detection made
@@ -488,8 +606,18 @@ function PrewarmPanel({
                 onChange={(e) => setWarmPods(Math.max(0, Number(e.target.value)))}
               />
               <p className="text-xs text-muted-foreground tabular-nums">
-                ≈ {warmPods * 3} concurrent calls (estimate, ~3 per pod). This number is
-                what gets provisioned on Apply — set it to 0 (or turn prewarm off) to stop.
+                {gpuModels.length === 0 ? (
+                  <>Pick a GPU model below to size capacity (≈ {cap.default}/pod default).</>
+                ) : perPodMin === perPodMax ? (
+                  <>≈ <span className="font-medium text-foreground">{perPodMin}</span> concurrent
+                    calls/pod × {warmPods} = <span className="font-medium text-foreground">{totalMin}</span> total.
+                    Auto-sized to the GPU + stack; each pod VRAM-clamps at boot.</>
+                ) : (
+                  <>≈ <span className="font-medium text-foreground">{perPodMin}–{perPodMax}</span>/pod
+                    × {warmPods} = <span className="font-medium text-foreground">{totalMin}–{totalMax}</span> total
+                    (mixed GPU models — a pod could be any selected model).</>
+                )}
+                {" "}Applying provisions <span className="font-medium text-foreground">{warmPods}</span> pod{warmPods === 1 ? "" : "s"}; set 0 (or turn prewarm off) to stop.
               </p>
               {!enabled && (
                 <p className="text-xs text-amber-400">
@@ -561,6 +689,49 @@ function PrewarmPanel({
                 </p>
               </div>
 
+              {/* Engine stack — drives per-pod concurrency (shown live above). */}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Speech model</label>
+                  <Select value={whisperModel}
+                    onValueChange={(v) => setWhisperModel(v ?? "small")}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {WHISPER_OPTIONS.map((o) => (
+                        <SelectItem key={o.id} value={o.id}>{o.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">VibeVoice HD voice</label>
+                  <label className="flex h-9 items-center gap-2 rounded-lg border border-border px-3">
+                    <Switch checked={prewarmVibeVoice} onCheckedChange={setPrewarmVibeVoice} />
+                    <span className="text-xs text-muted-foreground">
+                      {prewarmVibeVoice ? "On — richer voice, lower concurrency" : "Off — Kokoro only (faster)"}
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Pod image — the build/push lever. Empty = the backend default tag. */}
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Pod image</label>
+                <Input
+                  className="font-mono text-xs"
+                  placeholder={defaultPodImage ?? "backend default (FLEET_VAST_POD_IMAGE)"}
+                  value={podImage}
+                  onChange={(e) => setPodImage(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  The Docker image every new pod boots. After a code change, rebuild + push
+                  this tag, then redeploy pods — pods running older code get a{" "}
+                  <span className="font-medium text-amber-400">stale code</span> badge below.
+                </p>
+              </div>
+
               {/* Live offers — selectable (per-cost) OfferTable, manual refresh only */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2">
@@ -609,6 +780,63 @@ function PrewarmPanel({
               </p>
             </div>
 
+            {/* ── AudioSocket (VICIdial / SIP) ── */}
+            <div className="flex items-center justify-between gap-3 border-t px-4 py-4">
+              <div className="min-w-0">
+                <label className="text-sm font-medium">AudioSocket (VICIdial / SIP)</label>
+                <p className="text-xs text-muted-foreground">
+                  Provision pods with a mapped TCP port so a SIP call can stream audio
+                  directly to the pod (needed for the VICIdial edge). Off = Twilio/web only.
+                  Takes effect on newly-provisioned pods.
+                </p>
+              </div>
+              <Switch checked={audiosocketOn} onCheckedChange={setAudiosocketOn} />
+            </div>
+
+            {/* ── Boot manifest ── the receipt: exactly what each provisioned pod will
+                run and prewarm, derived from the staged form (not the saved config). */}
+            <div className="space-y-2 px-4 py-4">
+              <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                Each pod boots
+              </p>
+              <dl className="grid gap-x-6 gap-y-1.5 text-xs sm:grid-cols-[auto_1fr]">
+                <dt className="text-muted-foreground">Image</dt>
+                <dd className="min-w-0 truncate font-mono" title={podImage.trim() || defaultPodImage || undefined}>
+                  {podImage.trim() || defaultPodImage || "backend default"}
+                  {!podImage.trim() && defaultPodImage && (
+                    <span className="ml-1.5 font-sans text-muted-foreground">(default)</span>
+                  )}
+                </dd>
+                <dt className="text-muted-foreground">Speech-to-text</dt>
+                <dd>
+                  whisper <span className="font-medium">{whisperModel}</span>
+                  {gpuModels.length > 0 && <> · <span className="font-medium">{perPodLabel}</span> concurrent workers</>}
+                  {" "}warmed at boot
+                </dd>
+                <dt className="text-muted-foreground">Voice (TTS)</dt>
+                <dd>
+                  Kokoro
+                  {gpuModels.length > 0 && <> · <span className="font-medium">{perPodLabel}</span> pipelines</>}
+                  {" "}warmed (all 27 voices)
+                  {prewarmVibeVoice && <> · <span className="font-medium">+ VibeVoice HD sidecar</span></>}
+                </dd>
+                <dt className="text-muted-foreground">AudioSocket</dt>
+                <dd>
+                  {audiosocketOn
+                    ? <>TCP <span className="font-mono">{AUDIOSOCKET_DEFAULT_PORT}</span> mapped — VICIdial/SIP can stream to it</>
+                    : <>off — Twilio/web calls only</>}
+                </dd>
+                <dt className="text-muted-foreground">Capacity</dt>
+                <dd className="tabular-nums">
+                  {gpuModels.length === 0
+                    ? <>pick a GPU model to size (≈ {cap.default}/pod default)</>
+                    : perPodMin === perPodMax
+                      ? <>≈ <span className="font-medium">{perPodMin}</span> concurrent calls/pod · <span className="font-medium">{totalMin}</span> total ({warmPods}× pod{warmPods === 1 ? "" : "s"}) — TTS + STT + call cap all sized to this at boot</>
+                      : <>≈ <span className="font-medium">{perPodMin}–{perPodMax}</span>/pod · <span className="font-medium">{totalMin}–{totalMax}</span> total (depends on which selected GPU model provisions)</>}
+                </dd>
+              </dl>
+            </div>
+
             {/* ── Footer ── Apply is the ONLY lever that provisions real (billed) GPU
                 pods, so spell out exactly what it will do before the click. */}
             <div className="flex items-center justify-between gap-3 px-4 py-3">
@@ -636,6 +864,10 @@ function PrewarmPanel({
                   warmPods,
                   busyMessage,
                   maxPrice: maxPriceNum ?? null,
+                  audiosocketPort: audiosocketOn ? AUDIOSOCKET_DEFAULT_PORT : 0,
+                  whisperModels,
+                  prewarmVibeVoice,
+                  podImage: podImage.trim() || null,
                 })}
                 disabled={!canApply || save.isPending}
                 className="shrink-0"
@@ -659,7 +891,7 @@ function PrewarmPanel({
 
 /** Live list of inbound pods, each with a slot-usage bar + recovery affordance. */
 function InboundPodList({
-  pods, registry, attachedByPod, loading, error, enabled, target, onRetry,
+  pods, registry, attachedByPod, loading, error, enabled, target, onRetry, cpVersion,
 }: {
   pods: PodRecord[];
   registry: InboundSlot[];
@@ -669,6 +901,8 @@ function InboundPodList({
   enabled: boolean;
   target: number;
   onRetry: () => void;
+  /** The control plane's code fingerprint — pods reporting a different one run stale code. */
+  cpVersion: string | null;
 }) {
   // Index the registry by join key (slot.podId === pod.inboundToken).
   const slotByToken = React.useMemo(() => {
@@ -718,6 +952,7 @@ function InboundPodList({
                 pod={p}
                 slot={p.inboundToken ? slotByToken.get(p.inboundToken) ?? null : null}
                 attachedCount={attachedByPod[p.id] ?? 0}
+                cpVersion={cpVersion}
               />
             ))}
           </div>
@@ -755,15 +990,40 @@ function SlotUsage({ slot }: { slot: InboundSlot | null }) {
 }
 
 function InboundPodCard({
-  pod, slot, attachedCount,
-}: { pod: PodRecord; slot: InboundSlot | null; attachedCount: number }) {
+  pod, slot, attachedCount, cpVersion,
+}: { pod: PodRecord; slot: InboundSlot | null; attachedCount: number; cpVersion: string | null }) {
   const recoverable = pod.status === "missing" || pod.status === "deprecated";
   const instance = pod.providerId ?? pod.runpodId;
   const seen = relativeTime(pod.lastSeenAt ?? undefined);
+  // Code freshness: the pod registered with the fingerprint of its baked caller/ tree.
+  // Differs from the control plane's ⇒ the image is stale (rebuild + push + redeploy).
+  // Unknown (pre-fingerprint pod / CP version not loaded) ⇒ no badge, no false alarms.
+  const codeState: "current" | "stale" | null =
+    cpVersion && pod.codeVersion ? (pod.codeVersion === cpVersion ? "current" : "stale") : null;
   return (
     <div className="space-y-2.5 rounded-lg border border-border p-3">
       <div className="flex items-start justify-between gap-2">
-        <PodStatusBadge status={pod.status} />
+        <div className="flex min-w-0 items-center gap-1.5">
+          <PodStatusBadge status={pod.status} />
+          {codeState === "stale" && (
+            <Badge
+              variant="outline"
+              className="border-amber-500/40 bg-amber-500/10 text-amber-400"
+              title={`Pod runs code ${pod.codeVersion} but the control plane is on ${cpVersion} — rebuild + push the pod image, then redeploy this pod.`}
+            >
+              stale code
+            </Badge>
+          )}
+          {codeState === "current" && (
+            <Badge
+              variant="outline"
+              className="border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+              title={`Pod code matches the control plane (${cpVersion}).`}
+            >
+              current
+            </Badge>
+          )}
+        </div>
         <span className="min-w-0 max-w-[160px] truncate text-right text-xs text-muted-foreground" title={pod.gpuType}>
           {pod.gpuType}
         </span>
@@ -801,6 +1061,7 @@ function InboundPodCard({
         <span>{fmtCost(pod.costPerHr)}/hr · {fmtCost(pod.accumulatedCost)} spent</span>
         <span className="flex items-center gap-1">
           <AttachPodNumbersDialog pod={pod} />
+          <AttachPodBotsDialog pod={pod} />
           {recoverable && <ReupButton pod={pod} />}
           {/* Logs · Pause/Resume · Destroy — destroy is always available (even while
               provisioning) so the admin can kill any inbound instance at any time. */}

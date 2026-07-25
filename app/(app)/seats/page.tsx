@@ -4,10 +4,12 @@ import * as React from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Seats, type BotSeat, type SeatTransferTarget, type SeatAmiInput } from "@/lib/api/seats";
+import { Pools } from "@/lib/api/pools";
 import { Assistants, Flows } from "@/lib/api/resources";
 import type { Assistant, Flow } from "@/lib/api/schemas";
 import { toastApiError } from "@/lib/api/errors";
 import { API_BASE } from "@/lib/api/client";
+import { buildCarrierBlock, buildAllocateSnippet } from "@/lib/sip-config";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -16,8 +18,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import Link from "next/link";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -28,7 +31,44 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   PlusIcon, Trash2Icon, ServerIcon, CopyIcon, RotateCcwIcon, PencilIcon,
+  PhoneIncomingIcon, CableIcon, BotIcon, ChevronRightIcon,
+  CheckCircle2Icon, AlertTriangleIcon, CircleSlashIcon, BookOpenIcon,
 } from "lucide-react";
+import { getRole } from "@/lib/auth";
+import { cn } from "@/lib/utils";
+
+// One honest word about whether a call to this seat connects right now. Infra
+// (pods/pools) stays behind the admin wall; clients see only this.
+const ROUTE_HEALTH: Record<string, {
+  label: string; hint: string; cls: string; Icon: typeof CheckCircle2Icon;
+}> = {
+  ok: {
+    label: "Reachable", hint: "Calls to this seat connect now.",
+    cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400",
+    Icon: CheckCircle2Icon,
+  },
+  degraded: {
+    label: "Rerouting", hint: "Preferred capacity is down; calls still connect on backup.",
+    cls: "border-amber-500/40 bg-amber-500/10 text-amber-400",
+    Icon: AlertTriangleIcon,
+  },
+  down: {
+    label: "No capacity", hint: "No server is ready — new calls can't connect yet.",
+    cls: "border-destructive/40 bg-destructive/10 text-destructive",
+    Icon: CircleSlashIcon,
+  },
+};
+
+function SeatHealthBadge({ health }: { health?: string }) {
+  const h = ROUTE_HEALTH[health ?? "down"] ?? ROUTE_HEALTH.down;
+  return (
+    // aria-label carries the full meaning (not just the tooltip, which SRs/touch miss).
+    <Badge variant="outline" className={cn("gap-1", h.cls)} title={h.hint}
+      aria-label={`${h.label}: ${h.hint}`}>
+      <h.Icon className="size-3" aria-hidden /> {h.label}
+    </Badge>
+  );
+}
 
 // Base UI's Select rejects empty values; encode the agent choice as "a:<id>" /
 // "f:<id>" so one control covers assistants AND flows.
@@ -48,25 +88,31 @@ type Draft = {
   agent: string;               // encoded "a:<id>" / "f:<id>"
   maxConcurrent: number;
   active: boolean;
+  amdEnabled: boolean;
   notes: string;
   transferTargets: SeatTransferTarget[];
   amiEnabled: boolean;
   ami: { host: string; port: number; user: string; secret: string };
   sipEnabled: boolean;
   returnTarget: string;
+  poolId: string;              // "" = whole warm pool
 };
 
 const EMPTY_DRAFT: Draft = {
-  name: "", agent: "", maxConcurrent: 1, active: true, notes: "",
+  name: "", agent: "", maxConcurrent: 1, active: true, amdEnabled: true, notes: "",
   transferTargets: [],
   amiEnabled: false,
   ami: { host: "", port: 5038, user: "", secret: "" },
   sipEnabled: false,
   returnTarget: "",
+  poolId: "",
 };
 
+// Base UI's Select rejects empty values; sentinel for "no pool" (whole warm pool).
+const NO_POOL = "__warm_pool";
+
 function SeatDialog({
-  open, onOpenChange, seat, assistants, flows, onSaved,
+  open, onOpenChange, seat, assistants, flows, onSaved, isAdmin,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
@@ -74,6 +120,7 @@ function SeatDialog({
   assistants: Assistant[];
   flows: Flow[];
   onSaved: () => void;
+  isAdmin: boolean;                   // pod-pool binding is admin-only (infra stays hidden)
 }) {
   const [d, setD] = React.useState<Draft>(EMPTY_DRAFT);
 
@@ -86,6 +133,7 @@ function SeatDialog({
         agent: encodeAgent(seat),
         maxConcurrent: seat.maxConcurrent ?? 1,
         active: seat.active ?? true,
+        amdEnabled: seat.amdEnabled ?? true,
         notes: seat.notes ?? "",
         transferTargets: seat.transferTargets ?? [],
         amiEnabled: !!seat.ami,
@@ -98,11 +146,16 @@ function SeatDialog({
         },
         sipEnabled: seat.sipEnabled ?? false,
         returnTarget: seat.returnTarget ?? "",
+        poolId: seat.poolId ?? "",
       });
     } else {
       setD(EMPTY_DRAFT);
     }
   }, [open, seat]);
+
+  // Pod pools for the admin-only pool selector — clients never see it, so don't fetch.
+  const poolsQ = useQuery({ queryKey: ["seat-pools"], queryFn: Pools.listForSeat, enabled: isAdmin });
+  const pools = poolsQ.data ?? [];
 
   const save = useMutation({
     mutationFn: () => {
@@ -116,11 +169,13 @@ function SeatDialog({
         assistantId, flowId,
         maxConcurrent: d.maxConcurrent,
         active: d.active,
+        amdEnabled: d.amdEnabled,
         notes: d.notes,
         transferTargets: d.transferTargets.filter((t) => t.label.trim() && t.value.trim()),
         ami,
         sipEnabled: d.sipEnabled,
         returnTarget: d.returnTarget.trim() || null,
+        poolId: d.poolId || null,
       };
       return seat ? Seats.update(seat.id, body) : Seats.create(body);
     },
@@ -151,8 +206,8 @@ function SeatDialog({
         <DialogHeader>
           <DialogTitle>{seat ? "Edit seat" : "New bot seat"}</DialogTitle>
           <DialogDescription>
-            A seat lets a call center&apos;s VICIdial dialer connect one concurrent call to
-            this bot over AudioSocket. Buy N seats for N concurrent calls.
+            A seat connects your VICIdial dialer to one AI bot, one call at a time. Pick the
+            bot, choose how the dialer connects, then wire it up from the seat&apos;s card.
           </DialogDescription>
         </DialogHeader>
 
@@ -170,12 +225,24 @@ function SeatDialog({
                 <SelectValue placeholder="Pick an assistant or flow" />
               </SelectTrigger>
               <SelectContent>
-                {assistants.map((a) => (
-                  <SelectItem key={`a:${a.id}`} value={`a:${a.id}`}>Assistant · {a.name}</SelectItem>
-                ))}
-                {flows.map((f) => (
-                  <SelectItem key={`f:${f.id}`} value={`f:${f.id}`}>Flow · {f.name}</SelectItem>
-                ))}
+                {/* Grouped so the two kinds read as distinct sections, not one long
+                    prefixed list — quicker to scan when a client has many of each. */}
+                {assistants.length > 0 && (
+                  <SelectGroup>
+                    <SelectLabel>Assistants</SelectLabel>
+                    {assistants.map((a) => (
+                      <SelectItem key={`a:${a.id}`} value={`a:${a.id}`}>{a.name}</SelectItem>
+                    ))}
+                  </SelectGroup>
+                )}
+                {flows.length > 0 && (
+                  <SelectGroup>
+                    <SelectLabel>Flows</SelectLabel>
+                    {flows.map((f) => (
+                      <SelectItem key={`f:${f.id}`} value={`f:${f.id}`}>{f.name}</SelectItem>
+                    ))}
+                  </SelectGroup>
+                )}
               </SelectContent>
             </Select>
           </div>
@@ -193,6 +260,19 @@ function SeatDialog({
             </div>
           </div>
 
+          {/* Machine & menu detection */}
+          <div className="flex items-center justify-between rounded-lg border p-3">
+            <div>
+              <p className="text-sm font-medium">Detect machines &amp; menus</p>
+              <p className="text-xs text-muted-foreground">
+                Hang up on voicemail and navigate phone menus automatically. Turn off if
+                your dialer already screens answering machines.
+              </p>
+            </div>
+            <Switch checked={d.amdEnabled}
+              onCheckedChange={(v) => setD((p) => ({ ...p, amdEnabled: v }))} />
+          </div>
+
           {/* Transfer targets */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
@@ -202,8 +282,13 @@ function SeatDialog({
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Where the AI hands a qualified caller. The <span className="font-medium">value</span> is
-              an in-group / extension YOUR dialplan routes on (the bot writes it as the transfer outcome).
+              Named destinations the AI can transfer a caller to. The{" "}
+              <span className="font-medium">value</span> is an in-group or extension on{" "}
+              <span className="font-medium">your VICIdial</span> that rings a human agent
+              (e.g. <span className="font-mono">8600051</span>); the AI dials it over your own
+              trunk. The <span className="font-medium">label</span> (e.g. &ldquo;Sales&rdquo;)
+              is what the AI matches the caller&apos;s intent against. Add one per destination,
+              or leave this empty and set a single default below.
             </p>
             {d.transferTargets.map((t, i) => (
               <div key={i} className="flex items-center gap-2">
@@ -247,24 +332,105 @@ function SeatDialog({
             )}
           </div>
 
-          {/* SIP access */}
-          <div className="space-y-2 rounded-lg border p-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium">SIP access (VICIdial)</p>
-                <p className="text-xs text-muted-foreground">
-                  Let the call center connect this bot with a SIP carrier — no scripts,
-                  works on any Asterisk. We generate the login automatically.
-                </p>
-              </div>
-              <Switch checked={d.sipEnabled}
-                onCheckedChange={(v) => setD((p) => ({ ...p, sipEnabled: v }))} />
+          {/* Connection method — the ONE choice a client must make to wire their
+              dialer. Two mutually-exclusive paths, not two stray toggles. */}
+          <div className="space-y-2">
+            <label id="conn-method-label" className="text-sm font-medium">How the dialer connects</label>
+            <div className="grid grid-cols-2 gap-2" role="group" aria-labelledby="conn-method-label">
+              <button type="button" aria-pressed={d.sipEnabled}
+                onClick={() => setD((p) => ({ ...p, sipEnabled: true }))}
+                className={cn("rounded-lg border p-3 text-left transition-colors",
+                  d.sipEnabled ? "border-primary bg-primary/5 ring-1 ring-primary"
+                    : "border-border hover:bg-muted/50")}>
+                <span className="flex items-center gap-1.5 text-sm font-medium">
+                  <CableIcon className="size-3.5" /> SIP trunk
+                </span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Register a carrier in VICIdial. Works on any Asterisk, no scripting. Recommended.
+                </span>
+              </button>
+              <button type="button" aria-pressed={!d.sipEnabled}
+                onClick={() => setD((p) => ({ ...p, sipEnabled: false }))}
+                className={cn("rounded-lg border p-3 text-left transition-colors",
+                  !d.sipEnabled ? "border-primary bg-primary/5 ring-1 ring-primary"
+                    : "border-border hover:bg-muted/50")}>
+                <span className="flex items-center gap-1.5 text-sm font-medium">
+                  <ServerIcon className="size-3.5" /> HTTP allocate
+                </span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Your dialplan calls our API per call. For custom integrations.
+                </span>
+              </button>
             </div>
             {d.sipEnabled && (
-              <Input placeholder="Transfer to (their in-group, optional)" value={d.returnTarget}
-                onChange={(e) => setD((p) => ({ ...p, returnTarget: e.target.value }))} />
+              <div className="space-y-1.5 pt-1">
+                <label className="text-sm font-medium">Agent extension for transfers</label>
+                <Input placeholder="e.g. 8600051" value={d.returnTarget}
+                  onChange={(e) => setD((p) => ({ ...p, returnTarget: e.target.value }))} />
+                <p className="text-xs text-muted-foreground">
+                  Where a transfer sends the caller: the in-group or extension on your VICIdial
+                  that rings a human. The AI hands the live call here over your own trunk.{" "}
+                  <span className="font-medium text-foreground">Required if this bot will
+                  transfer</span> — leave blank only if it never does. Used as the default when
+                  no named transfer target above matches.
+                </p>
+                {/* Concrete example so a non-technical operator knows what to type. */}
+                <div className="rounded-md bg-muted/60 px-2.5 py-2 text-[11px] text-muted-foreground">
+                  <span className="font-medium text-foreground">Example:</span> in VICIdial this is
+                  your <span className="font-mono">In-Group ID</span> (like{" "}
+                  <span className="font-mono">8600051</span>) or a dialable extension (like{" "}
+                  <span className="font-mono">8368</span>) that routes to a live agent queue.
+                </div>
+              </div>
             )}
+            <p className="text-xs text-muted-foreground">
+              {d.sipEnabled
+                ? "After saving, copy the carrier block from the seat card into VICIdial → Carriers."
+                : "After saving, hand the allocate snippet on the seat card to your dialplan engineer."}
+            </p>
           </div>
+
+          {/* Pod pool — ADMIN ONLY. Infra (pods/pools) stays behind the admin wall;
+              clients never see it. Lets an admin swap the underlying GPU pod without
+              the client reconfiguring anything. */}
+          {isAdmin && (
+            <div className="space-y-1.5 rounded-lg border border-dashed p-3">
+              <label className="flex items-center gap-1.5 text-sm font-medium">
+                <ServerIcon className="size-3.5 text-muted-foreground" /> Pod pool
+                <Badge variant="outline" className="ml-1 text-[10px]">Admin</Badge>
+              </label>
+              <Select
+                value={d.poolId || NO_POOL}
+                onValueChange={(v) =>
+                  setD((p) => ({ ...p, poolId: v === NO_POOL ? "" : (v ?? "") }))}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_POOL}>Whole warm pool (default)</SelectItem>
+                  {pools.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name} · {p.podCount} pod{p.podCount === 1 ? "" : "s"}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Route this seat through a specific pool of GPU pods. The{" "}
+                <span className="font-medium">warm pool</span> is the shared set of ready
+                pods every seat falls back to — leave it on that unless you&apos;re pinning
+                capacity.
+              </p>
+              {d.poolId && pools.find((p) => p.id === d.poolId)?.podCount === 0 && (
+                <p className="flex items-center gap-1.5 text-xs text-amber-400">
+                  <AlertTriangleIcon className="size-3.5 shrink-0" aria-hidden />
+                  This pool has no pods yet — calls will fall back to the warm pool until you
+                  add one on the Pools page.
+                </p>
+              )}
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <label className="text-sm font-medium">Notes (optional)</label>
@@ -286,10 +452,7 @@ function SeatDialog({
 }
 
 function AllocateSnippet({ seat }: { seat: BotSeat }) {
-  const snippet =
-    `curl -s -X POST "${API_BASE}/audiosocket/allocate" \\\n` +
-    `  -H "X-API-Key: <YOUR_API_KEY>" -H "Content-Type: application/json" \\\n` +
-    `  -d '{"seatId":"${seat.id}","fromNumber":"<LEAD_PHONE>","channel":"<ASTERISK_CHANNEL>"}'`;
+  const snippet = buildAllocateSnippet(seat, API_BASE);
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(snippet);
@@ -302,13 +465,20 @@ function AllocateSnippet({ seat }: { seat: BotSeat }) {
     <div className="mt-2 rounded-md bg-muted/60 p-2">
       <div className="flex items-center justify-between">
         <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-          Dialer allocate call
+          HTTP allocate — for your dialplan engineer
         </p>
         <Button variant="ghost" size="icon" className="size-6" onClick={copy}>
           <CopyIcon className="size-3.5" />
         </Button>
       </div>
-      <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all text-[11px] text-muted-foreground">
+      <p className="mt-1 text-[11px] text-muted-foreground">
+        Your Asterisk dialplan calls this once per call to get a bot; the response says
+        which server to bridge to. Needs an{" "}
+        <Link href="/api-settings" className="font-medium text-primary underline-offset-2 hover:underline">
+          API key
+        </Link>.
+      </p>
+      <pre className="mt-1.5 overflow-x-auto whitespace-pre-wrap break-all text-[11px] text-muted-foreground">
         {snippet}
       </pre>
     </div>
@@ -327,17 +497,12 @@ function ConnectDialerCard({ seat }: { seat: BotSeat }) {
   });
 
   if (!seat.sipEnabled) return null;
-  const pw = seat.sipPassword ?? "<password>";
   const rows: [string, string][] = [
     ["Server", seat.sipServerHost ?? "(set SIP_SERVER_HOST)"],
     ["Username", seat.sipUsername ?? "—"],
     ["Password", seat.sipPassword ?? "•••••• (shown once — rotate to see a new one)"],
   ];
-  const block =
-    `; AIDEVGEN AI bot trunk\n` +
-    `register => ${seat.sipUsername}:${pw}@${seat.sipServerHost}\n` +
-    `[aidevgen]\ntype=peer\nhost=${seat.sipServerHost}\nusername=${seat.sipUsername}\n` +
-    `fromuser=${seat.sipUsername}\nsecret=${pw}\ndisallow=all\nallow=ulaw\n`;
+  const block = buildCarrierBlock(seat);
   const copy = async () => {
     try { await navigator.clipboard.writeText(block); toast.success("Carrier block copied"); }
     catch { toast.error("Could not copy"); }
@@ -366,8 +531,42 @@ function ConnectDialerCard({ seat }: { seat: BotSeat }) {
         </Button>
       </div>
       <p className="text-[11px] text-muted-foreground">
-        Paste into VICIdial → Admin → Carriers, then dial this trunk from a campaign.
+        Paste into VICIdial → Admin → Carriers, then dial this trunk from a campaign.{" "}
+        <Link href="/seats/connect" className="font-medium text-primary underline-offset-2 hover:underline">
+          Full step-by-step guide
+        </Link>
       </p>
+    </div>
+  );
+}
+
+/** How a call reaches a bot, in the client's own words — the seat page's teacher.
+ *  Four fixed stages; the seat is the one the client owns. */
+function CallPathStrip() {
+  const stages: { icon: typeof PhoneIncomingIcon; label: string; sub: string }[] = [
+    { icon: PhoneIncomingIcon, label: "Your VICIdial", sub: "dials a lead" },
+    { icon: CableIcon, label: "SIP trunk", sub: "carries the call" },
+    { icon: ServerIcon, label: "Bot seat", sub: "one call = one seat" },
+    { icon: BotIcon, label: "AI answers", sub: "on a ready server" },
+  ];
+  return (
+    <div className="flex flex-wrap items-center gap-x-1 gap-y-2 rounded-lg border bg-muted/30 px-3 py-2.5">
+      {stages.map((s, i) => (
+        <React.Fragment key={s.label}>
+          <div className="flex items-center gap-2">
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-background text-muted-foreground">
+              <s.icon className="size-3.5" aria-hidden />
+            </span>
+            <div className="leading-tight">
+              <p className="text-xs font-medium text-foreground">{s.label}</p>
+              <p className="text-[11px] text-muted-foreground">{s.sub}</p>
+            </div>
+          </div>
+          {i < stages.length - 1 && (
+            <ChevronRightIcon className="hidden size-3.5 shrink-0 text-muted-foreground/60 sm:inline" aria-hidden />
+          )}
+        </React.Fragment>
+      ))}
     </div>
   );
 }
@@ -375,6 +574,9 @@ function ConnectDialerCard({ seat }: { seat: BotSeat }) {
 export default function SeatsPage() {
   const qc = useQueryClient();
   const onChanged = () => qc.invalidateQueries({ queryKey: ["bot-seats"] });
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => setMounted(true), []);
+  const isAdmin = mounted && getRole() === "admin";
 
   // Poll so the "in use" badge stays live while calls come and go.
   const { data: seats, isLoading } = useQuery<BotSeat[]>({
@@ -408,17 +610,25 @@ export default function SeatsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Run</p>
+          <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">VICIdial</p>
           <h1 className="mt-0.5 text-base font-semibold text-foreground">Bot seats</h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Let a call center&apos;s own VICIdial dialer connect calls to your bots over AudioSocket.
-            Each seat = one concurrent call; give them an API key and the allocate snippet below.
+          <p className="text-xs text-muted-foreground mt-0.5 max-w-prose">
+            A seat connects your VICIdial dialer to one AI bot. One seat = one call at a time;
+            buy more seats to run more calls at once. Create a seat, pick the bot, then connect
+            your dialer with the details on its card.
           </p>
         </div>
-        <Button onClick={openCreate}><PlusIcon className="size-4" />New seat</Button>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="outline" render={<Link href="/seats/connect" />}>
+            <BookOpenIcon className="size-4" /> How to connect
+          </Button>
+          <Button onClick={openCreate}><PlusIcon className="size-4" />New seat</Button>
+        </div>
       </div>
+
+      <CallPathStrip />
 
       {isLoading ? (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -433,8 +643,8 @@ export default function SeatsPage() {
             <div className="space-y-1">
               <p className="text-sm font-medium">No bot seats yet</p>
               <p className="text-xs text-muted-foreground max-w-xs">
-                Create a seat, bind it to an assistant or flow, then share the allocate snippet
-                and an API key with the call center running VICIdial.
+                Create a seat, pick the assistant or flow that answers, then connect your
+                VICIdial dialer with the SIP carrier details on the seat&apos;s card.
               </p>
             </div>
             <Button onClick={openCreate}><PlusIcon className="size-4" />New seat</Button>
@@ -454,10 +664,12 @@ export default function SeatsPage() {
                         {s.flowId ? "Flow" : "Assistant"} · {agentName(s)}
                       </p>
                       <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        {s.active
+                          ? <SeatHealthBadge health={s.routeHealth} />
+                          : <Badge variant="outline">Inactive</Badge>}
                         <Badge variant={inUse ? "default" : "secondary"}>
                           {s.activeCalls}/{s.maxConcurrent} in use
                         </Badge>
-                        {!s.active && <Badge variant="outline">Inactive</Badge>}
                         {s.ami?.hasSecret && <Badge variant="outline">AMI</Badge>}
                         {s.transferTargets.length > 0 && (
                           <Badge variant="outline">{s.transferTargets.length} transfer</Badge>
@@ -512,6 +724,7 @@ export default function SeatsPage() {
         assistants={assistants ?? []}
         flows={flows ?? []}
         onSaved={onChanged}
+        isAdmin={isAdmin}
       />
     </div>
   );

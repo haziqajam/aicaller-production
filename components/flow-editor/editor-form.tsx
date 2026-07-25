@@ -79,6 +79,7 @@ const PROVIDER_ICON: Record<LlmProvider, LucideIcon> = {
   openai: SparklesIcon,
   groq: ZapIcon,
   ollama: ServerIcon,
+  openrouter: GlobeIcon,
 };
 const STT_ICON: Record<string, LucideIcon> = {
   deepgram: WavesIcon,
@@ -100,7 +101,7 @@ const STT_LABEL: Record<string, string> = {
   whisper_local: "Multilingual (Local)",
 };
 const TTS_LABEL: Record<string, string> = {
-  kokoro: "English (Kokoro)",
+  kokoro: "English (Local)",   // keep in sync with the assistant editor + card-helpers
   piper_urdu: "Urdu (Piper)",
   vibevoice: "VibeVoice",
   deepgram: "Deepgram Aura",
@@ -178,7 +179,6 @@ export function FlowEditorForm({ flowId, defaultValues }: FlowEditorFormProps) {
   // ── Catalog-driven engine/model/voice options (mirrors the assistant editor;
   // the backend catalog is the single source of truth, static seeds are the
   // offline fallback). ─────────────────────────────────────────────────────
-  const voicemailEnabled = useWatch({ control, name: "voicemail.enabled" }) ?? false;
   const ivrEnabled = useWatch({ control, name: "ivr.enabled" }) ?? false;
   const llmProvider = useWatch({ control, name: "llm.provider" }) ?? "openai";
   const sttEngine = useWatch({ control, name: "stt.engine" }) ?? "deepgram";
@@ -204,6 +204,33 @@ export function FlowEditorForm({ flowId, defaultValues }: FlowEditorFormProps) {
   const llmProviders = catalog?.llm;
   const sttEngines = catalog?.stt;
   const ttsEngines = catalog?.tts;
+
+  // New flow: snap default engines to the first tier-ALLOWED catalog option so a
+  // low-tier user isn't blocked (the hardcoded openai/deepgram defaults may be
+  // above their tier, which the filtered catalog omits → 403 on save). Only for
+  // a brand-new flow; never rewrite an existing saved config.
+  React.useEffect(() => {
+    if (!isNew || !catalog) return;
+    const llm = catalog.llm ?? [];
+    const stt = catalog.stt ?? [];
+    const tts = catalog.tts ?? [];
+    if (llm.length && !llm.some((p) => p.id === llmProvider)) {
+      const p = llm[0];
+      setValue("llm.provider", p.id as "openai" | "groq" | "ollama" | "openrouter", { shouldDirty: false });
+      if (p.models?.[0]) setValue("llm.model", p.models[0].id, { shouldDirty: false });
+    }
+    if (stt.length && !stt.some((e) => e.id === sttEngine)) {
+      setValue("stt.engine", stt[0].id as "openai" | "deepgram" | "asrtest" | "whisper_local",
+        { shouldDirty: false });
+    }
+    if (tts.length && !tts.some((e) => e.id === ttsEngine)) {
+      const t = tts[0];
+      setValue("tts.engine", t.id as "kokoro" | "piper_urdu" | "vibevoice" | "deepgram",
+        { shouldDirty: false });
+      if (t.voices?.[0]) setValue("tts.voice", t.voices[0], { shouldDirty: false });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNew, catalog]);
 
   // Live model overlay for providers flagged `live` (groq / ollama).
   const providerInfo = llmProviders?.find((p) => p.id === llmProvider);
@@ -262,11 +289,14 @@ export function FlowEditorForm({ flowId, defaultValues }: FlowEditorFormProps) {
       if (!provider) return;
       setValue("llm.provider", provider, { shouldDirty: true });
       const models = modelsForProvider(provider);
-      if (!isModelValid(provider, getValues("llm.model")) && models.length > 0) {
-        setValue("llm.model", models[0].value, { shouldDirty: true });
+      // openrouter has no static seed (models=[]) — fall back to the catalog's
+      // default-first list so the form never keeps a stale cross-provider model id.
+      const effectiveModels = models.length > 0 ? models : modelsFromCatalog(llmProviders, provider);
+      if (!isModelValid(provider, getValues("llm.model")) && effectiveModels.length > 0) {
+        setValue("llm.model", effectiveModels[0].value, { shouldDirty: true });
       }
     },
-    [setValue, getValues]
+    [setValue, getValues, llmProviders]
   );
 
   /** Reset the voice to the first valid option for a newly-picked TTS engine. */
@@ -894,10 +924,8 @@ export function FlowEditorForm({ flowId, defaultValues }: FlowEditorFormProps) {
                     <div className="space-y-0.5 pr-4">
                       <FormLabel>Voicemail detection</FormLabel>
                       <FormDescription>
-                        Outbound phone calls: hold the opening turn until a human
-                        answers; on a machine, leave the message below and hang
-                        up. Inert in browser tests. Not compatible with IVR
-                        navigation (IVR wins when both are on).
+                        Detect answering machines and phone menus. On voicemail the call ends and is
+                        recorded as &ldquo;voicemail&rdquo;; menus are navigated automatically to reach a human.
                       </FormDescription>
                     </div>
                     <FormControl>
@@ -906,21 +934,6 @@ export function FlowEditorForm({ flowId, defaultValues }: FlowEditorFormProps) {
                   </FormItem>
                 )}
               />
-              {voicemailEnabled && (
-                <FormField
-                  control={control}
-                  name="voicemail.message"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel className="text-xs">Voicemail message</FormLabel>
-                      <FormControl>
-                        <Textarea rows={2} {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              )}
             </div>
 
             {/* IVR navigation — phone calls only. */}
@@ -949,11 +962,11 @@ export function FlowEditorForm({ flowId, defaultValues }: FlowEditorFormProps) {
                   name="ivr.navigationPrompt"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel className="text-xs">Navigation guidance</FormLabel>
+                      <FormLabel className="text-xs">Navigation guidance (optional — menus are handled automatically)</FormLabel>
                       <FormControl>
                         <Textarea
                           rows={2}
-                          placeholder='e.g. "If you reach a menu, press the option for billing."'
+                          placeholder='e.g. "Press 3 for billing, then extension 1042."'
                           {...field}
                         />
                       </FormControl>

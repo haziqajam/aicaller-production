@@ -32,6 +32,7 @@ import {
   WrenchIcon, PlusIcon, Trash2Icon, PencilIcon, TagIcon, GlobeIcon,
   KeyRoundIcon, BracesIcon, TriangleAlertIcon, type LucideIcon,
 } from "lucide-react";
+import { PageHeader } from "@/components/page-header";
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Types + helpers
@@ -443,19 +444,12 @@ export default function ToolsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-base font-semibold text-foreground">
-            <WrenchIcon className="size-4 text-primary" aria-hidden />
-            Tools
-          </h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            Custom HTTP tools your assistants can call during a conversation. Attach them
-            to an assistant from the assistant editor&apos;s Tools tab.
-          </p>
-        </div>
-        <ToolDialog onSaved={onSaved} trigger={<Button><PlusIcon className="size-4" />New tool</Button>} />
-      </div>
+      <PageHeader
+        eyebrow="Build"
+        title="Tools"
+        description="Custom HTTP tools your assistants can call during a conversation. Attach them to an assistant from the assistant editor's Tools tab."
+        actions={<ToolDialog onSaved={onSaved} trigger={<Button><PlusIcon className="size-4" />New tool</Button>} />}
+      />
 
       <Card>
         <CardContent className="p-0">

@@ -412,7 +412,7 @@ function AdminNumbersContent() {
                 <TableBody>
                   {tb.filtered.map((num) => (
                     <TableRow key={num.id}>
-                      <TableCell className="font-mono text-sm text-foreground">
+                      <TableCell className="tabular text-sm text-foreground">
                         {num.phoneNumber}
                       </TableCell>
                       <TableCell>

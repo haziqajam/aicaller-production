@@ -28,6 +28,9 @@ export type CallStatus =
   | "paused"
   | "draft"
   | "idle"
+  | "human"
+  | "ivr_then_human"
+  | "ivr_no_human"
   | string; // allow unknown pass-throughs
 
 type Semantic = "success" | "warning" | "destructive" | "primary" | "muted" | "idle";
@@ -60,6 +63,14 @@ function resolveStatus(status: string): StatusStyle {
     case "voicemail":
     case "left-voicemail":
       return { semantic: "warning", label: "voicemail" };
+
+    // ── call-progress outcomes ────────────────────────────────────────────
+    case "human":
+      return { semantic: "success", label: "reached human" };
+    case "ivr_then_human":
+      return { semantic: "success", label: "menu → human" };
+    case "ivr_no_human":
+      return { semantic: "warning", label: "menu · no human" };
 
     // ── destructive ──────────────────────────────────────────────────
     case "failed":

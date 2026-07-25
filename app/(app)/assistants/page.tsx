@@ -13,6 +13,7 @@ import {
 import { useUrlPagination } from "@/lib/use-url-pagination";
 import { PaginationBar } from "@/components/pagination-bar";
 import { BrowserCallDialog } from "@/components/browser-call-dialog";
+import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -184,24 +185,17 @@ function AssistantsContent() {
 
       {/* ── Teaching empty state (no assistants at all) ───────── */}
       {isEmpty && (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
-            <div className="flex size-11 items-center justify-center rounded-xl border border-primary/20 bg-primary/10">
-              <BotIcon className="size-5 text-primary" aria-hidden />
-            </div>
-            <div className="space-y-1">
-              <p className="text-sm font-medium">No assistants yet</p>
-              <p className="mx-auto max-w-xs text-xs text-muted-foreground">
-                Create an assistant to define its voice, language model, and
-                conversation behavior.
-              </p>
-            </div>
+        <EmptyState
+          icon={BotIcon}
+          title="No assistants yet"
+          hint="Create an assistant to define its voice, language model, and conversation behavior."
+          action={
             <Button render={<Link href="/assistants/new" />}>
               <PlusIcon className="size-4" aria-hidden />
               Create one
             </Button>
-          </CardContent>
-        </Card>
+          }
+        />
       )}
 
       {/* ── Toolbar + grid (has assistants) ───────────────────── */}

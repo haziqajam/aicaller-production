@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Flows } from "@/lib/api/resources";
 import { FlowCard } from "@/components/flow-card";
 import { FlowCallDialog } from "@/components/flow-call-dialog";
+import { EmptyState } from "@/components/empty-state";
 import { useUrlPagination } from "@/lib/use-url-pagination";
 import { PaginationBar } from "@/components/pagination-bar";
 import { Button } from "@/components/ui/button";
@@ -93,26 +94,17 @@ function FlowsContent() {
 
       {/* ── Teaching empty state ──────────────────────────────── */}
       {isEmpty && (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
-            <div className="flex size-11 items-center justify-center rounded-xl border border-primary/20 bg-primary/10">
-              <WorkflowIcon className="size-5 text-primary" aria-hidden />
-            </div>
-            <div className="space-y-1">
-              <p className="text-sm font-medium">No flows yet</p>
-              <p className="mx-auto max-w-xs text-xs text-muted-foreground">
-                A flow is a structured conversation graph: nodes with goals,
-                transitions the model triggers, and actions like speaking a line
-                or ending the call. Build one, test it in the browser, then
-                attach it to a campaign — just like an assistant.
-              </p>
-            </div>
+        <EmptyState
+          icon={WorkflowIcon}
+          title="No flows yet"
+          hint="A flow is a structured conversation graph: nodes with goals, transitions the model triggers, and actions like speaking a line or ending the call. Build one, test it in the browser, then attach it to a campaign, just like an assistant."
+          action={
             <Button render={<Link href="/flows/new" />}>
               <PlusIcon className="size-4" aria-hidden />
               Create one
             </Button>
-          </CardContent>
-        </Card>
+          }
+        />
       )}
 
       {/* ── Search + grid ─────────────────────────────────────── */}

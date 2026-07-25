@@ -110,8 +110,10 @@ export default function AppLayout({
           {/* Spacer */}
           <div className="flex-1" />
 
-          {/* Controls cluster: theme toggle + account, grouped in one accented glass pill */}
-          <div className="flex items-center gap-0.5 rounded-full border border-white/10 bg-card/70 p-1 shadow-sm ring-1 ring-inset ring-white/5 backdrop-blur-md transition-all duration-200 hover:border-primary/40 hover:ring-primary/25 hover:shadow-[0_0_22px_-6px_var(--primary)]">
+          {/* Controls cluster: preset switcher + theme toggle + account, grouped in one
+              flat pill. No glass/glow — decoration is reserved for genuinely live state
+              (DESIGN.md: --glow-primary is for active calls/connections, not chrome). */}
+          <div className="flex items-center gap-0.5 rounded-full border border-border bg-card p-1">
             <TwilioPresetSwitcher />
             <span className="mx-0.5 h-5 w-px bg-border/70" aria-hidden />
             <ThemeToggle />

@@ -29,8 +29,11 @@ export const LIMITS = {
 const E164_OR_EMPTY = (v: string) => v === "" || /^\+[1-9]\d{1,14}$/.test(v);
 
 export const llmConfig = z.object({
-  provider: z.enum(["openai", "groq", "ollama"]).default("openai"),
+  provider: z.enum(["openai", "groq", "ollama", "openrouter"]).default("openai"),
   model: z.string().max(LIMITS.model).default("gpt-4.1-mini"),
+  // OpenRouter: server-resolved pin id (e.g. "recommended"). Read-only from the
+  // backend; the editor sends back whatever was resolved on last save.
+  pin: z.string().nullish(),
 });
 export const sttConfig = z.object({
   engine: z.enum(["deepgram", "openai", "asrtest", "whisper_local"]).default("deepgram"),
@@ -78,15 +81,9 @@ export const transferConfig = z.object({
 });
 export const voicemailConfig = z.object({
   enabled: z.boolean().default(false),
-  // Spoken into the voicemail before hanging up (overridable here in the UI).
-  message: z
-    .string()
-    .max(LIMITS.voicemailMessage)
-    .default(
-      "Sorry we couldn't reach you. Please call us back at your convenience. Thank you.",
-    ),
-  // Seconds of silence after the greeting before leaving the message.
-  responseDelay: z.number().min(0).max(30).default(2),
+  // Deprecated (engine ignores them) — kept optional so old docs parse.
+  message: z.string().max(LIMITS.voicemailMessage).optional(),
+  responseDelay: z.number().min(0).max(30).optional(),
 });
 export const ivrConfig = z.object({
   enabled: z.boolean().default(false),

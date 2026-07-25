@@ -44,6 +44,7 @@ export type CallRecord = {
   transfer?: Record<string, unknown> | null;
   cost?: Record<string, unknown>;
   usage?: Record<string, unknown>;
+  callOutcome?: string;
 };
 
 export function formatDuration(seconds: number | null | undefined): string {
@@ -129,6 +130,14 @@ export const callsColumns: ColumnDef<CallRecord>[] = [
       if (!filterValue) return true;
       const val = (row.getValue(columnId) as string) ?? "";
       return val.toLowerCase() === filterValue.toLowerCase();
+    },
+  },
+  {
+    accessorKey: "callOutcome",
+    header: "Result",
+    cell: ({ getValue }) => {
+      const v = getValue() as string | undefined;
+      return v ? <StatusChip status={v} /> : <span className="text-muted-foreground">—</span>;
     },
   },
 ];

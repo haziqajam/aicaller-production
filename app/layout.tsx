@@ -17,6 +17,10 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: { default: "AI Caller", template: "%s · AI Caller" },
   description: "AI-powered voice calling platform for campaigns and assistants.",
+  // The app ships its own dark theme; this tells the Dark Reader browser extension
+  // NOT to re-theme the page. Without it, Dark Reader rewrites every SVG's stroke
+  // (breaking React hydration) and mis-colors the OKLCH theme (the "all red" UI).
+  other: { "darkreader-lock": "true" },
 };
 
 export default function RootLayout({

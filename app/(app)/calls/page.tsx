@@ -241,7 +241,7 @@ function CallsContent() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <span className="tabular text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
           From
         </span>
         <input
@@ -250,7 +250,7 @@ function CallsContent() {
           onChange={(e) => setDateFrom(e.target.value || null)}
           className="tabular h-7 rounded-md border border-border bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring transition-colors duration-150"
         />
-        <span className="tabular text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
           To
         </span>
         <input

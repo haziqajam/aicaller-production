@@ -1,11 +1,29 @@
 import { apiFetch } from "./client";
 
+export type Tier = "basic" | "pro" | "ultra";
+
 export type UserRecord = {
   id: string;
   email: string;
   role: "user" | "admin";
   active?: boolean;
   created_at?: string;
+  /** Plan tier + effective limits (null => unlimited / all engines allowed). */
+  tier?: Tier | null;
+  maxSeats?: number | null;
+  llmProviderAllowList?: string[] | null;
+  sttEngineAllowList?: string[] | null;
+  ttsEngineAllowList?: string[] | null;
+};
+
+/** Set a user's tier and/or per-user limit overrides. Providing `tier` re-applies
+ *  that tier's preset defaults; any override field also sent is layered on top. */
+export type SetTierBody = {
+  tier?: Tier | null;
+  maxSeats?: number | null;
+  llmProviderAllowList?: string[] | null;
+  sttEngineAllowList?: string[] | null;
+  ttsEngineAllowList?: string[] | null;
 };
 
 export type AdminNumberRecord = {
@@ -24,9 +42,14 @@ export type AdminNumberUpdate = {
 
 export const Admin = {
   listUsers: () => apiFetch<UserRecord[]>("/admin/users"),
-  createUser: (body: { email: string; password: string; role?: "user" | "admin" }) =>
+  createUser: (body: { email: string; password: string; role?: "user" | "admin"; tier?: Tier }) =>
     apiFetch<UserRecord>("/admin/users", {
       method: "POST",
+      body: JSON.stringify(body),
+    }),
+  setTier: (id: string, body: SetTierBody) =>
+    apiFetch<UserRecord>(`/admin/users/${id}/tier`, {
+      method: "PUT",
       body: JSON.stringify(body),
     }),
   setRole: (id: string, role: "user" | "admin") =>

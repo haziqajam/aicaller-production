@@ -45,6 +45,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { KeyRoundIcon, CopyIcon, CheckIcon, Trash2Icon, ShieldAlertIcon } from "lucide-react";
+import { PageHeader } from "@/components/page-header";
 
 /* ─── helpers ────────────────────────────────────────────────── */
 
@@ -252,20 +253,18 @@ export default function ApiSettingsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-base font-semibold text-foreground">
-            <KeyRoundIcon className="size-4 text-primary" aria-hidden />
-            API keys
-          </h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">
+      <PageHeader
+        eyebrow="Settings"
+        title="API keys"
+        description={
+          <>
             Programmatic access to the API. Send your key in the{" "}
-            <code>X-API-Key</code> header. Keys act as you with regular user
-            access and can be given an expiry.
-          </p>
-        </div>
-        <CreateKeyDialog onCreated={setSecret} />
-      </div>
+            <code>X-API-Key</code> header. Keys act as you with regular user access and
+            can be given an expiry.
+          </>
+        }
+        actions={<CreateKeyDialog onCreated={setSecret} />}
+      />
 
       <Card>
         <CardContent className="p-0">
@@ -300,7 +299,7 @@ export default function ApiSettingsPage() {
                   return (
                     <TableRow key={k.id}>
                       <TableCell className="font-medium">{k.name}</TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">
+                      <TableCell className="tabular text-xs text-muted-foreground">
                         {k.hint}
                       </TableCell>
                       <TableCell>
@@ -315,13 +314,13 @@ export default function ApiSettingsPage() {
                           {st.label}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
+                      <TableCell className="tabular text-sm text-muted-foreground">
                         {fmtDate(k.createdAt)}
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
+                      <TableCell className="tabular text-sm text-muted-foreground">
                         {fmtDate(k.expiresAt)}
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
+                      <TableCell className="tabular text-sm text-muted-foreground">
                         {fmtDate(k.lastUsedAt)}
                       </TableCell>
                       <TableCell className="text-right">

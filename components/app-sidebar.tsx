@@ -37,6 +37,9 @@ import {
   LayoutDashboardIcon,
   WorkflowIcon,
   ServerIcon,
+  BellIcon,
+  LayersIcon,
+  GaugeIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -51,7 +54,11 @@ const NAV_ICONS: Record<string, React.ElementType> = {
   "/campaigns": MegaphoneIcon,
   "/seats": ServerIcon,
   "/calls": PhoneCallIcon,
+  "/vicidial/pods": ServerIcon,
+  "/vicidial/pools": LayersIcon,
+  "/vicidial/alerts": BellIcon,
   "/admin/users": ShieldIcon,
+  "/admin/tiers": GaugeIcon,
   "/admin/numbers": PhoneIcon,
   "/": LayoutDashboardIcon,
 };

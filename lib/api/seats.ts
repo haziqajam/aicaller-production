@@ -28,6 +28,7 @@ export type BotSeat = {
   assistantId: string | null;
   flowId: string | null;
   maxConcurrent: number;
+  amdEnabled: boolean;
   activeCalls: number;
   active: boolean;
   transferTargets: SeatTransferTarget[];
@@ -37,6 +38,16 @@ export type BotSeat = {
   sipUsername: string | null;
   returnTarget: string | null;
   sipServerHost: string | null;
+  /** Pod-pool binding. null => whole warm pool (default). */
+  poolId: string | null;
+  /** Roster pin — the specific pod this bot is assigned to (admin-managed via the
+   *  fleet Pods page). null => not pinned. Read-only here. */
+  podId?: string | null;
+  /** Can a call to this seat connect right now, and on its preferred capacity?
+   *  ok = ready; degraded = preferred pod/pool down but warm-pool fallback carries
+   *  it; down = no capacity, an allocate would fail. Infra (pods/pools) stays behind
+   *  the admin wall — this is the one word clients get. */
+  routeHealth?: "ok" | "degraded" | "down";
   /** Present ONLY in the response that just minted/rotated it — copy it now. */
   sipPassword?: string;
   createdAt?: string;
@@ -56,12 +67,14 @@ export type BotSeatCreate = {
   assistantId?: string | null;
   flowId?: string | null;
   maxConcurrent?: number;
+  amdEnabled?: boolean;
   active?: boolean;
   transferTargets?: SeatTransferTarget[];
   ami?: SeatAmiInput | null;
   notes?: string;
   sipEnabled?: boolean;
   returnTarget?: string | null;
+  poolId?: string | null;
 };
 
 export type BotSeatUpdate = Partial<BotSeatCreate>;

@@ -89,6 +89,7 @@ const PROVIDER_ICON: Record<LlmProvider, LucideIcon> = {
   openai: Sparkles,
   groq: Zap,
   ollama: Server,
+  openrouter: Globe,
 };
 const STT_ICON: Record<string, LucideIcon> = {
   deepgram: Waves,
@@ -323,7 +324,6 @@ export function EditorForm({ assistantId, defaultValues }: EditorFormProps) {
   const idleTimeout = useWatch({ control, name: "idle.timeout" });
   const idleHoldMaxSec = useWatch({ control, name: "idle.holdMaxSec" });
   const transferEnabled = useWatch({ control, name: "transfer.enabled" });
-  const voicemailEnabled = useWatch({ control, name: "voicemail.enabled" });
   const ivrEnabled = useWatch({ control, name: "ivr.enabled" });
   const endCallEnabled = useWatch({ control, name: "endCall.enabled" });
 
@@ -369,6 +369,32 @@ export function EditorForm({ assistantId, defaultValues }: EditorFormProps) {
   const llmProviders = catalog?.llm;
   const sttEngines = catalog?.stt;
   const ttsEngines = catalog?.tts;
+
+  // New assistant: the hardcoded defaults (openai / deepgram) can be ABOVE the
+  // user's tier, which the tier-filtered catalog omits — so a low-tier user
+  // saving with the defaults would hit a 403. Snap each engine to the first
+  // ALLOWED catalog option (only when the current value isn't offered). Never
+  // runs for an existing assistant (don't rewrite a saved config).
+  useEffect(() => {
+    if (!isNew || !catalog) return;
+    const llm = catalog.llm ?? [];
+    const stt = catalog.stt ?? [];
+    const tts = catalog.tts ?? [];
+    if (llm.length && !llm.some((p) => p.id === llmProvider)) {
+      const p = llm[0];
+      setValue("llm.provider", p.id as Assistant["llm"]["provider"], { shouldDirty: false });
+      if (p.models?.[0]) setValue("llm.model", p.models[0].id, { shouldDirty: false });
+    }
+    if (stt.length && !stt.some((e) => e.id === sttEngine)) {
+      setValue("stt.engine", stt[0].id as Assistant["stt"]["engine"], { shouldDirty: false });
+    }
+    if (tts.length && !tts.some((e) => e.id === ttsEngine)) {
+      const t = tts[0];
+      setValue("tts.engine", t.id as Assistant["tts"]["engine"], { shouldDirty: false });
+      if (t.voices?.[0]) setValue("tts.voice", t.voices[0], { shouldDirty: false });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNew, catalog]);
 
   // Watch the Whisper-local model size (only meaningful for that engine).
   const sttModel = useWatch({ control, name: "stt.model" });
@@ -461,11 +487,14 @@ export function EditorForm({ assistantId, defaultValues }: EditorFormProps) {
       if (!provider) return;
       setValue("llm.provider", provider, { shouldDirty: true });
       const models = modelsForProvider(provider);
-      if (!isModelValid(provider, getValues("llm.model")) && models.length > 0) {
-        setValue("llm.model", models[0].value, { shouldDirty: true });
+      // openrouter has no static seed (models=[]) — fall back to the catalog's
+      // default-first list so the form never keeps a stale cross-provider model id.
+      const effectiveModels = models.length > 0 ? models : modelsFromCatalog(llmProviders, provider);
+      if (!isModelValid(provider, getValues("llm.model")) && effectiveModels.length > 0) {
+        setValue("llm.model", effectiveModels[0].value, { shouldDirty: true });
       }
     },
-    [setValue, getValues]
+    [setValue, getValues, llmProviders]
   );
 
   /** Reset the voice to the first valid option for a newly-picked TTS engine. */
@@ -1275,7 +1304,7 @@ export function EditorForm({ assistantId, defaultValues }: EditorFormProps) {
                   <SectionHeader
                     icon={Voicemail}
                     title="Voicemail detection"
-                    description="On outbound calls, detect when a machine answers and leave a message instead of talking to dead air."
+                    description={'Detect answering machines and phone menus. On voicemail the call ends and is recorded as “voicemail”; menus are navigated automatically to reach a human.'}
                     tone="cyan"
                   />
                 </CardHeader>
@@ -1288,9 +1317,8 @@ export function EditorForm({ assistantId, defaultValues }: EditorFormProps) {
                         <div>
                           <FormLabel>Detect voicemail</FormLabel>
                           <FormDescription>
-                            A parallel classifier holds the greeting until it
-                            decides a human answered. On voicemail it leaves the
-                            message below, then hangs up. (Outbound calls only.)
+                            Detect answering machines and phone menus. On voicemail the call ends and is
+                            recorded as &ldquo;voicemail&rdquo;; menus are navigated automatically to reach a human.
                           </FormDescription>
                         </div>
                         <FormControl>
@@ -1302,63 +1330,6 @@ export function EditorForm({ assistantId, defaultValues }: EditorFormProps) {
                       </FormItem>
                     )}
                   />
-
-                  {voicemailEnabled && (
-                    <FormField
-                      control={control}
-                      name="voicemail.message"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Voicemail message</FormLabel>
-                          <FormDescription>
-                            Spoken into the voicemail before hanging up.
-                          </FormDescription>
-                          <FormControl>
-                            <Textarea
-                              rows={3}
-                              placeholder="Sorry we couldn't reach you. Please call us back at your convenience."
-                              {...field}
-                              value={field.value ?? ""}
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  )}
-
-                  {voicemailEnabled && (
-                    <FormField
-                      control={control}
-                      name="voicemail.responseDelay"
-                      render={({ field }) => (
-                        <FormItem>
-                          <div className="flex items-center justify-between">
-                            <FormLabel>Response delay</FormLabel>
-                            <span className="text-sm tabular-nums text-muted-foreground">
-                              {Number(field.value ?? 2).toFixed(1)}s
-                            </span>
-                          </div>
-                          <FormControl>
-                            <Slider
-                              min={0}
-                              max={10}
-                              step={0.5}
-                              value={field.value as number}
-                              onValueChange={(v) =>
-                                field.onChange(typeof v === "number" ? v : (v as readonly number[])[0])
-                              }
-                            />
-                          </FormControl>
-                          <FormDescription>
-                            Seconds of silence after the greeting before the voicemail
-                            message is left (lets the machine&apos;s beep finish first).
-                          </FormDescription>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  )}
                 </CardContent>
               </Card>
 
@@ -1401,15 +1372,17 @@ export function EditorForm({ assistantId, defaultValues }: EditorFormProps) {
                       name="ivr.navigationPrompt"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>Navigation guidance</FormLabel>
+                          <FormLabel>Navigation guidance (optional)</FormLabel>
                           <FormDescription>
-                            Tell the assistant how to navigate menus. The model
-                            decides which keys to press at runtime.
+                            The assistant already knows how to work menus: it
+                            listens to the options offered and picks the one most
+                            likely to reach a live human. Add specifics only if
+                            you know the target&apos;s menu.
                           </FormDescription>
                           <FormControl>
                             <Textarea
                               rows={3}
-                              placeholder="e.g. If you reach a menu, press the option for billing. If asked for an account number, press 0 to reach an agent."
+                              placeholder="e.g. Press 3 for billing, then extension 1042."
                               {...field}
                               value={field.value ?? ""}
                             />

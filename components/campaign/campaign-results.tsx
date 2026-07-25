@@ -76,7 +76,10 @@ function CallRow({
           <UserIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
           <span className="truncate">{label}</span>
         </span>
-        <StatusChip status={call.status ?? "—"} />
+        <span className="flex shrink-0 items-center gap-1.5">
+          <StatusChip status={call.status ?? "—"} />
+          {call.callOutcome && <StatusChip status={call.callOutcome} />}
+        </span>
       </div>
       <div className="flex items-center justify-between gap-2 pl-5 text-[11px] text-muted-foreground">
         <span className="tabular truncate">{call.to ?? ""}</span>
@@ -166,6 +169,27 @@ export function CampaignResults({
 
   const selected = ordered.find((c) => c.id === selectedId) ?? ordered[0];
 
+  // Outcome summary — counts per callOutcome value across all loaded calls.
+  const outcomes = ordered.reduce((acc: Record<string, number>, c) => {
+    if (c.callOutcome) acc[c.callOutcome] = (acc[c.callOutcome] ?? 0) + 1;
+    return acc;
+  }, {});
+  const hasOutcomes = Object.keys(outcomes).length > 0;
+
+  const outcomeSummary = hasOutcomes ? (
+    <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-md border border-border bg-muted/20 px-3 py-1.5">
+      <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        Results
+      </span>
+      {Object.entries(outcomes).map(([outcome, count]) => (
+        <span key={outcome} className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          <span className="tabular font-medium">{count}×</span>
+          <StatusChip status={outcome} />
+        </span>
+      ))}
+    </div>
+  ) : null;
+
   const conversation = (
     <CallConversation
       key={selected.id}
@@ -185,6 +209,7 @@ export function CampaignResults({
   if (ordered.length === 1) {
     return (
       <div className="flex flex-col gap-2 lg:h-full lg:min-h-0">
+        {outcomeSummary}
         <div className="flex shrink-0 items-center justify-between gap-2">
           <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
             <UserIcon className="size-3.5 text-muted-foreground" aria-hidden />
@@ -199,6 +224,8 @@ export function CampaignResults({
 
   // Multiple calls → master-detail (rail + conversation), stacks on mobile.
   return (
+    <div className="flex flex-col gap-3 lg:h-full lg:min-h-0">
+      {outcomeSummary}
     <div className="grid gap-3 lg:h-full lg:min-h-0 lg:grid-cols-[minmax(15rem,20rem)_1fr]">
       <div className="flex max-h-[40vh] flex-col overflow-hidden rounded-lg border border-border lg:max-h-none lg:h-full lg:min-h-0">
         <div className="flex shrink-0 items-center justify-between border-b border-border bg-muted/30 px-3 py-2">
@@ -246,6 +273,7 @@ export function CampaignResults({
         </div>
         {conversation}
       </div>
+    </div>
     </div>
   );
 }

@@ -17,6 +17,8 @@ import {
 import {
   KeyRoundIcon, PlusIcon, PencilIcon, Trash2Icon, CheckIcon, PhoneIcon,
 } from "lucide-react";
+import { PageHeader } from "@/components/page-header";
+import { EmptyState } from "@/components/empty-state";
 
 function maskSid(sid?: string | null): string {
   if (!sid) return "—";
@@ -61,39 +63,28 @@ export default function TwilioSettingsPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-primary/30 bg-primary/10 text-primary">
-            <KeyRoundIcon className="size-4" aria-hidden />
-          </span>
-          <div>
-            <h1 className="text-base font-semibold text-foreground">Twilio accounts</h1>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Each account holds its own Twilio credentials. The <span className="font-medium text-foreground">active</span> account
-              drives your numbers, campaigns, and calls. Switch it any time from the navbar.
-            </p>
-          </div>
-        </div>
-        <Button onClick={openCreate}><PlusIcon className="size-4" aria-hidden />Add account</Button>
-      </div>
+      <PageHeader
+        eyebrow="Settings"
+        title="Twilio accounts"
+        description={
+          <>
+            Each account holds its own Twilio credentials. The{" "}
+            <span className="font-medium text-foreground">active</span> account drives your
+            numbers, campaigns, and calls. Switch it any time from the navbar.
+          </>
+        }
+        actions={<Button onClick={openCreate}><PlusIcon className="size-4" aria-hidden />Add account</Button>}
+      />
 
       {isLoading ? (
         <Skeleton className="h-40 rounded-lg" />
       ) : list.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
-            <div className="flex size-10 items-center justify-center rounded-lg bg-muted">
-              <KeyRoundIcon className="size-5 text-muted-foreground" aria-hidden />
-            </div>
-            <div className="space-y-1">
-              <p className="text-sm font-medium">No Twilio accounts yet</p>
-              <p className="max-w-xs text-xs text-muted-foreground">
-                Add your Twilio credentials to list numbers, buy/import numbers, and run campaigns.
-              </p>
-            </div>
-            <Button onClick={openCreate}><PlusIcon className="size-4" aria-hidden />Add account</Button>
-          </CardContent>
-        </Card>
+        <EmptyState
+          icon={KeyRoundIcon}
+          title="No Twilio accounts yet"
+          hint="Add your Twilio credentials to list numbers, buy/import numbers, and run campaigns."
+          action={<Button onClick={openCreate}><PlusIcon className="size-4" aria-hidden />Add account</Button>}
+        />
       ) : (
         <div className="space-y-2">
           {list.map((p) => (
