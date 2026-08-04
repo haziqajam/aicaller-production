@@ -10,6 +10,7 @@ export const NAV_GROUPS: NavGroup[] = [
   { label: "Build", items: [
     { label: "Assistants", href: "/assistants" },
     { label: "Flows", href: "/flows" },
+    { label: "Voices", href: "/voices" },
     { label: "Tools", href: "/tools" },
     { label: "Numbers", href: "/numbers" },
     { label: "Inbound", href: "/inbound" },

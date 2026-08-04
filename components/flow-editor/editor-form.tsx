@@ -31,11 +31,16 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { Slider } from "@/components/ui/slider";
 import { flowSchema, type Flow, type FlowNode } from "@/lib/api/schemas";
-import { Flows, Tools, Voices } from "@/lib/api/resources";
+import { Flows, Tools, Voices, type Voice } from "@/lib/api/resources";
 import type { Tool } from "@/lib/api/schemas";
 import { toastApiError } from "@/lib/api/errors";
 import { Catalog } from "@/lib/api/catalog";
-import { voicesFromCatalog, type TtsEngine } from "@/lib/voice-options";
+import {
+  hasDynamicVoices,
+  voiceOptionsForEngine,
+  voiceOptionsFromVoices,
+  type TtsEngine,
+} from "@/lib/voice-options";
 import {
   modelsForProvider,
   isModelValid,
@@ -92,6 +97,7 @@ const TTS_ICON: Record<TtsEngine, LucideIcon> = {
   piper_urdu: LanguagesIcon,
   vibevoice: Volume2Icon,
   deepgram: WavesIcon,
+  neutts: Volume2Icon,
 };
 
 const STT_LABEL: Record<string, string> = {
@@ -105,6 +111,7 @@ const TTS_LABEL: Record<string, string> = {
   piper_urdu: "Urdu (Piper)",
   vibevoice: "VibeVoice",
   deepgram: "Deepgram Aura",
+  neutts: "NeuTTS Nano (Local)",
 };
 
 /* Small cloud vs self-hosted pill shown beside each engine/provider option
@@ -205,6 +212,16 @@ export function FlowEditorForm({ flowId, defaultValues }: FlowEditorFormProps) {
   const sttEngines = catalog?.stt;
   const ttsEngines = catalog?.tts;
 
+  // NeuTTS voices are per-owner rows, not a fixed catalog list — same treatment
+  // as the assistant editor (flows share the backend's TTSConfig).
+  const dynamicVoices = hasDynamicVoices(ttsEngines, ttsEngine);
+  const { data: engineVoices, isPending: voicesPending } = useQuery({
+    queryKey: ["voices", ttsEngine],
+    queryFn: () => Voices.list(ttsEngine),
+    enabled: dynamicVoices,
+    staleTime: 30 * 1000,
+  });
+
   // New flow: snap default engines to the first tier-ALLOWED catalog option so a
   // low-tier user isn't blocked (the hardcoded openai/deepgram defaults may be
   // above their tier, which the filtered catalog omits → 403 on save). Only for
@@ -225,7 +242,7 @@ export function FlowEditorForm({ flowId, defaultValues }: FlowEditorFormProps) {
     }
     if (tts.length && !tts.some((e) => e.id === ttsEngine)) {
       const t = tts[0];
-      setValue("tts.engine", t.id as "kokoro" | "piper_urdu" | "vibevoice" | "deepgram",
+      setValue("tts.engine", t.id as TtsEngine,
         { shouldDirty: false });
       if (t.voices?.[0]) setValue("tts.voice", t.voices[0], { shouldDirty: false });
     }
@@ -263,8 +280,15 @@ export function FlowEditorForm({ flowId, defaultValues }: FlowEditorFormProps) {
     TTS_LABEL[ttsEngine as TtsEngine] ??
     ttsEngine;
 
-  const availableVoices = voicesFromCatalog(ttsEngines, ttsEngine, runtimeCatalog);
-  const voiceIsValid = availableVoices.includes(ttsVoice);
+  const voiceOptions = voiceOptionsForEngine(ttsEngines, ttsEngine, {
+    voices: engineVoices,
+    runtimeCatalog,
+  });
+  const voiceListReady = !dynamicVoices || !voicesPending;
+  const voiceIsValid = voiceOptions.some((o) => o.value === ttsVoice);
+  const voiceItems = Object.fromEntries(
+    voiceOptions.map((o) => [o.value, o.label])
+  );
   const availableModels = modelsFromCatalog(
     llmProviders, llmProvider, liveModels?.models);
 
@@ -304,13 +328,33 @@ export function FlowEditorForm({ flowId, defaultValues }: FlowEditorFormProps) {
     (engine: TtsEngine | null) => {
       if (!engine) return;
       setValue("tts.engine", engine, { shouldDirty: true });
-      const voices = voicesFromCatalog(ttsEngines, engine, runtimeCatalog);
-      if (!voices.includes(getValues("tts.voice")) && voices.length > 0) {
-        setValue("tts.voice", voices[0], { shouldDirty: true });
+      const options = voiceOptionsForEngine(ttsEngines, engine, {
+        voices: qc.getQueryData<Voice[]>(["voices", engine]),
+        runtimeCatalog,
+      });
+      const selectable = options.filter((o) => !o.disabled);
+      if (
+        selectable.length > 0 &&
+        !options.some((o) => o.value === getValues("tts.voice"))
+      ) {
+        setValue("tts.voice", selectable[0].value, { shouldDirty: true });
       }
     },
-    [setValue, getValues, ttsEngines, runtimeCatalog]
+    [setValue, getValues, ttsEngines, runtimeCatalog, qc]
   );
+
+  // Repair the voice once a dynamic engine's rows arrive (the list is empty
+  // until GET /voices resolves, so onTtsEngineChange can't do it synchronously).
+  React.useEffect(() => {
+    if (!dynamicVoices || voicesPending) return;
+    const options = voiceOptionsFromVoices(engineVoices);
+    const selectable = options.filter((o) => !o.disabled);
+    const current = getValues("tts.voice");
+    if (selectable.length > 0 && !options.some((o) => o.value === current)) {
+      setValue("tts.voice", selectable[0].value, { shouldDirty: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dynamicVoices, voicesPending, engineVoices]);
 
   // When Whisper-local is selected, default/repair the model size.
   React.useEffect(() => {
@@ -705,25 +749,37 @@ export function FlowEditorForm({ flowId, defaultValues }: FlowEditorFormProps) {
                 <FormItem>
                   <FormLabel>Voice</FormLabel>
                   <Select
+                    items={voiceItems}
                     value={field.value}
                     onValueChange={field.onChange}
                   >
                     <FormControl>
                       <SelectTrigger className="w-full">
-                        <SelectValue placeholder="Select voice" />
+                        <SelectValue
+                          placeholder={
+                            dynamicVoices && voicesPending
+                              ? "Loading voices…"
+                              : "Select voice"
+                          }
+                        />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      {availableVoices.map((v) => (
-                        <SelectItem key={v} value={v}>
+                      {voiceOptions.map((v) => (
+                        <SelectItem
+                          key={v.value}
+                          value={v.value}
+                          disabled={v.disabled}
+                        >
                           <MicIcon className="size-3.5 text-muted-foreground" />
-                          {v}
+                          {v.label}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
-                  {/* Explain invalid combo — never silently allow it. */}
-                  {!voiceIsValid && ttsVoice && (
+                  {/* Explain invalid combo — never silently allow it. Suppressed
+                      while a dynamic list loads, or it flags every saved voice. */}
+                  {voiceListReady && !voiceIsValid && ttsVoice && (
                     <p className="mt-1 text-xs text-warning">
                       Voice &ldquo;{ttsVoice}&rdquo; is not compatible with{" "}
                       <strong className="font-medium">{ttsEngineLabel}</strong>.
@@ -740,9 +796,11 @@ export function FlowEditorForm({ flowId, defaultValues }: FlowEditorFormProps) {
                 </FormItem>
               )}
             />
-            {/* Voice speed — honored by kokoro & piper_urdu; deepgram (Aura)
-                and vibevoice have no rate param, so hide it there. */}
-            {ttsEngine !== "deepgram" && ttsEngine !== "vibevoice" && (
+            {/* Voice speed — honored by kokoro & piper_urdu; deepgram (Aura),
+                vibevoice, and neutts have no rate param, so hide it there. */}
+            {ttsEngine !== "deepgram" &&
+              ttsEngine !== "vibevoice" &&
+              ttsEngine !== "neutts" && (
               <FormField
                 control={control}
                 name="tts.speed"

@@ -3,7 +3,7 @@
 import { useEffect, useCallback, useRef, useState } from "react";
 import { useForm, useWatch, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   Form,
@@ -29,13 +29,19 @@ import { Slider } from "@/components/ui/slider";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { assistantSchema, LIMITS, type Assistant } from "@/lib/api/schemas";
-import { Assistants, Voices, Tools } from "@/lib/api/resources";
+import { Assistants, Voices, Tools, type Voice } from "@/lib/api/resources";
 import type { Tool } from "@/lib/api/schemas";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { Catalog } from "@/lib/api/catalog";
 import { toastApiError } from "@/lib/api/errors";
-import { voicesFromCatalog, type TtsEngine } from "@/lib/voice-options";
+import {
+  hasDynamicVoices,
+  voiceOptionsForEngine,
+  voiceOptionsFromVoices,
+  type TtsEngine,
+} from "@/lib/voice-options";
 import {
   modelsForProvider,
   isModelValid,
@@ -75,6 +81,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { QuestionsEditor } from "@/components/campaign/questions-editor";
+import { CloneVoiceDialog } from "@/components/voices/clone-voice-dialog";
 
 interface EditorFormProps {
   assistantId: string | undefined;
@@ -102,6 +109,7 @@ const TTS_ICON: Record<TtsEngine, LucideIcon> = {
   piper_urdu: Languages,
   vibevoice: Volume2,
   deepgram: Waves,
+  neutts: AudioLines,
 };
 
 // End-user-facing labels — internal self-hosted engine names (Kokoro, Piper,
@@ -136,6 +144,7 @@ const TTS_LABEL: Record<TtsEngine, string> = {
   piper_urdu: "Urdu (Local)",
   vibevoice: "Natural HD (Local)",
   deepgram: "Deepgram Aura",
+  neutts: "NeuTTS Nano (Local)",
 };
 
 /* Per-section accent tones for the header icon badge — adds visual rhythm. */
@@ -221,12 +230,15 @@ const FIELD_TAB: Record<string, string> = {
  * Multi-tab assistant editor.
  * Tabs: Identity | Model | Voice | Behavior | Tools | Analysis | Advanced
  *
- * Voices are sourced at runtime from Voices.catalog() (GET /api/voices).
- * The seed catalog in voice-options.ts is the fallback only.
+ * Voices: engines with a FIXED list (kokoro/piper/vibevoice/deepgram) come from
+ * GET /api/catalog, with voice-options.ts as the offline fallback. Engines flagged
+ * `dynamicVoices` (NeuTTS) instead read GET /voices — the owner's cloned voices
+ * plus the shared builtins — so a newly cloned voice appears with no code change.
  * Models/languages are strict dropdowns sourced from lib/model-options.ts.
  */
 export function EditorForm({ assistantId, defaultValues }: EditorFormProps) {
   const isNew = assistantId === undefined;
+  const queryClient = useQueryClient();
 
   const form = useForm<Assistant>({
     // zodResolver input/output types differ in zod v4; cast to satisfy RHF
@@ -370,6 +382,18 @@ export function EditorForm({ assistantId, defaultValues }: EditorFormProps) {
   const sttEngines = catalog?.stt;
   const ttsEngines = catalog?.tts;
 
+  // Engines whose voices are per-owner rows (NeuTTS) rather than a fixed list.
+  const dynamicVoices = hasDynamicVoices(ttsEngines, ttsEngine);
+  // The owner's cloned voices + the global builtins. Short staleTime because a
+  // clone finishing an encode must show up without a reload; the clone dialog
+  // also invalidates ["voices", engine] the moment one turns ready.
+  const { data: engineVoices, isPending: voicesPending } = useQuery({
+    queryKey: ["voices", ttsEngine],
+    queryFn: () => Voices.list(ttsEngine),
+    enabled: dynamicVoices,
+    staleTime: 30 * 1000,
+  });
+
   // New assistant: the hardcoded defaults (openai / deepgram) can be ABOVE the
   // user's tier, which the tier-filtered catalog omits — so a low-tier user
   // saving with the defaults would hit a 403. Snap each engine to the first
@@ -445,8 +469,22 @@ export function EditorForm({ assistantId, defaultValues }: EditorFormProps) {
     TTS_LABEL[ttsEngine as TtsEngine] ??
     ttsEngine;
 
-  const availableVoices = voicesFromCatalog(ttsEngines, ttsEngine, runtimeCatalog);
-  const voiceIsValid = availableVoices.includes(ttsVoice);
+  // One option list for BOTH kinds of engine: fixed lists come from the catalog
+  // seed, dynamic ones from the /voices rows (with encoding/failed clones listed
+  // but disabled).
+  const voiceOptions = voiceOptionsForEngine(ttsEngines, ttsEngine, {
+    voices: engineVoices,
+    runtimeCatalog,
+  });
+  // A saved voice counts as valid if it's in the list at ALL — a clone that is
+  // still encoding is a legitimate saved selection, just not re-selectable yet.
+  // While a dynamic list is still loading the list is empty, so suppress the
+  // warning entirely rather than flashing "not compatible" on every open.
+  const voiceListReady = !dynamicVoices || !voicesPending;
+  const voiceIsValid = voiceOptions.some((o) => o.value === ttsVoice);
+  const voiceItems = Object.fromEntries(
+    voiceOptions.map((o) => [o.value, o.label])
+  );
   const availableModels = modelsFromCatalog(
     llmProviders,
     llmProvider,
@@ -502,13 +540,39 @@ export function EditorForm({ assistantId, defaultValues }: EditorFormProps) {
     (engine: TtsEngine | null) => {
       if (!engine) return;
       setValue("tts.engine", engine, { shouldDirty: true });
-      const voices = voicesFromCatalog(ttsEngines, engine, runtimeCatalog);
-      if (!voices.includes(getValues("tts.voice")) && voices.length > 0) {
-        setValue("tts.voice", voices[0], { shouldDirty: true });
+      // For a dynamic engine the /voices query for THIS engine may not have run
+      // yet (the key includes the engine id), so `queryClient.getQueryData` is
+      // the only list available synchronously — undefined means "leave the voice
+      // alone"; the repair effect below fixes it once the rows arrive.
+      const options = voiceOptionsForEngine(ttsEngines, engine, {
+        voices: queryClient.getQueryData<Voice[]>(["voices", engine]),
+        runtimeCatalog,
+      });
+      const selectable = options.filter((o) => !o.disabled);
+      if (
+        selectable.length > 0 &&
+        !options.some((o) => o.value === getValues("tts.voice"))
+      ) {
+        setValue("tts.voice", selectable[0].value, { shouldDirty: true });
       }
     },
-    [setValue, getValues, ttsEngines, runtimeCatalog]
+    [setValue, getValues, ttsEngines, runtimeCatalog, queryClient]
   );
+
+  // Repair the voice once a DYNAMIC engine's rows land: switching to NeuTTS
+  // leaves the previous engine's voice in place until GET /voices resolves, and
+  // saving that would store e.g. "af_heart" on a neutts assistant. Only fires
+  // when the query has actually settled and the current value is not in the list.
+  useEffect(() => {
+    if (!dynamicVoices || voicesPending) return;
+    const options = voiceOptionsFromVoices(engineVoices);
+    const selectable = options.filter((o) => !o.disabled);
+    const current = getValues("tts.voice");
+    if (selectable.length > 0 && !options.some((o) => o.value === current)) {
+      setValue("tts.voice", selectable[0].value, { shouldDirty: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dynamicVoices, voicesPending, engineVoices]);
 
   // When Whisper-local is selected, default/repair the model size.
   useEffect(() => {
@@ -943,26 +1007,39 @@ export function EditorForm({ assistantId, defaultValues }: EditorFormProps) {
                       <FormItem>
                         <FormLabel>Voice</FormLabel>
                         <Select
+                          items={voiceItems}
                           value={field.value}
                           onValueChange={field.onChange}
                         >
                           <FormControl>
                             <SelectTrigger className="w-full">
-                              <SelectValue placeholder="Select voice" />
+                              <SelectValue
+                                placeholder={
+                                  dynamicVoices && voicesPending
+                                    ? "Loading voices…"
+                                    : "Select voice"
+                                }
+                              />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            {availableVoices.map((v) => (
-                              <SelectItem key={v} value={v}>
+                            {voiceOptions.map((v) => (
+                              <SelectItem
+                                key={v.value}
+                                value={v.value}
+                                disabled={v.disabled}
+                              >
                                 <Mic className="size-3.5 text-muted-foreground" />
-                                {v}
+                                {v.label}
                               </SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
 
-                        {/* Explain invalid combo — never silently allow it */}
-                        {!voiceIsValid && ttsVoice && (
+                        {/* Explain invalid combo — never silently allow it.
+                            Suppressed while a dynamic list is still loading, or
+                            the empty list would flag every saved voice as wrong. */}
+                        {voiceListReady && !voiceIsValid && ttsVoice && (
                           <p className="text-xs text-warning mt-1">
                             Voice &ldquo;{ttsVoice}&rdquo; is not compatible
                             with the{" "}
@@ -971,20 +1048,41 @@ export function EditorForm({ assistantId, defaultValues }: EditorFormProps) {
                           </p>
                         )}
 
-                        <FormDescription>
-                          Voices available for{" "}
-                          <span className="tabular rounded-sm border border-border bg-muted/60 px-1 py-0.5 text-[10px] font-medium text-foreground/80">
-                            {ttsEngineLabel}
+                        <FormDescription className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                          <span>
+                            Voices available for{" "}
+                            <span className="tabular rounded-sm border border-border bg-muted/60 px-1 py-0.5 text-[10px] font-medium text-foreground/80">
+                              {ttsEngineLabel}
+                            </span>
                           </span>
+                          {/* Cloning only exists for engines with per-owner
+                              voices — offering it on a fixed-list engine would
+                              promise something the backend can't do. */}
+                          {dynamicVoices && (
+                            <CloneVoiceDialog
+                              engine={ttsEngine}
+                              trigger={
+                                <Button
+                                  type="button"
+                                  variant="link"
+                                  size="sm"
+                                  className="h-auto p-0 text-xs"
+                                />
+                              }
+                            />
+                          )}
                         </FormDescription>
                         <FormMessage />
                       </FormItem>
                     )}
                   />
 
-                  {/* Voice speed — honored by kokoro & piper_urdu; deepgram (Aura)
-                      and vibevoice have no rate param, so hide it there. */}
-                  {ttsEngine !== "deepgram" && ttsEngine !== "vibevoice" && (
+                  {/* Voice speed — honored by kokoro & piper_urdu. deepgram (Aura),
+                      vibevoice, and neutts (llama.cpp sampling) have no rate
+                      param, so hide it there rather than show a dead control. */}
+                  {ttsEngine !== "deepgram" &&
+                    ttsEngine !== "vibevoice" &&
+                    ttsEngine !== "neutts" && (
                     <FormField
                       control={control}
                       name="tts.speed"

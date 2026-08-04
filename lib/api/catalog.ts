@@ -39,6 +39,12 @@ export interface TtsEngineInfo {
   label: string;
   type: ServiceType;
   voices: string[];
+  /**
+   * When true this engine's `voices` array is empty ON PURPOSE — its voices are
+   * per-owner rows fetched from GET /voices (NeuTTS: baked-in builtins plus the
+   * owner's own clones), not a fixed list the catalog could enumerate.
+   */
+  dynamicVoices?: boolean;
 }
 
 export interface CatalogData {

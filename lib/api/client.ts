@@ -24,8 +24,14 @@ export class ApiError extends Error {
 export async function apiFetch<T = unknown>(
   path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
+  // FormData bodies MUST NOT carry an explicit Content-Type: only the browser can
+  // append the `; boundary=...` the server needs to parse the multipart payload.
+  // Setting application/json here (or even multipart/form-data without a boundary)
+  // makes the upload arrive unparseable.
+  const isFormData =
+    typeof FormData !== "undefined" && options.body instanceof FormData;
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    ...(isFormData ? {} : { "Content-Type": "application/json" }),
     // Skip ngrok's free-tier browser-warning interstitial. Without this, ngrok
     // returns an HTML warning page (with NO Access-Control-Allow-Origin header)
     // for browser-originated requests, which the browser surfaces as a CORS error.

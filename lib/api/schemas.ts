@@ -45,10 +45,16 @@ export const sttConfig = z.object({
   model: z.string().max(LIMITS.model).nullish(),
 });
 export const ttsConfig = z.object({
-  engine: z.enum(["kokoro", "piper_urdu", "vibevoice", "deepgram"]).default("kokoro"),
+  // "neutts" mirrors caller/models.py TTSConfig. It MUST be listed here: this
+  // schema parses every assistant the editor loads, so an unlisted engine would
+  // be rejected client-side even after the backend accepted the save.
+  engine: z
+    .enum(["kokoro", "piper_urdu", "vibevoice", "deepgram", "neutts"])
+    .default("kokoro"),
+  // Free-form on purpose — NeuTTS voices are user-cloned, not a fixed engine list.
   voice: z.string().max(LIMITS.voice).default("af_heart"),
   // Speaking-rate multiplier. 1.0 = engine default; honored by kokoro & piper_urdu,
-  // ignored by deepgram. Matches backend TTSConfig.speed (ge 0.5, le 2.0).
+  // ignored by deepgram and neutts. Matches backend TTSConfig.speed (ge 0.5, le 2.0).
   speed: z.number().min(0.5).max(2).default(1),
 });
 export const vadConfig = z.object({

@@ -348,7 +348,59 @@ export const ApiKeys = {
     apiFetch<{ ok: boolean }>(`/api-keys/${id}`, { method: "DELETE" }),
 };
 
-export const Voices = { catalog: () => apiFetch<any>("/api/voices") };
+/**
+ * A NeuTTS speaker reference. `builtin` voices are baked into the pod image and
+ * shared by every tenant; `cloned` ones were uploaded by this owner and encoded
+ * by the Encoder Service — which is why they carry a status.
+ */
+export type Voice = {
+  id: string;
+  name: string;
+  displayName: string;
+  engine: string;
+  source: "builtin" | "cloned";
+  status: "encoding" | "ready" | "failed";
+  error: string | null;
+  createdAt: string | null;
+};
+
+export const Voices = {
+  /**
+   * Legacy engine -> voice-list map (GET /api/voices). Still the fallback seed
+   * for the FIXED engines; it knows nothing about cloned voices.
+   */
+  catalog: () => apiFetch<Record<string, string[]>>("/api/voices"),
+  /** The owner's voices + the global builtins, for engines with dynamic voices. */
+  list: (engine = "neutts") =>
+    apiFetch<Voice[]>(`/voices?engine=${encodeURIComponent(engine)}`),
+  get: (id: string) => apiFetch<Voice>(`/voices/${id}`),
+  remove: (id: string) =>
+    apiFetch<{ ok: boolean }>(`/voices/${id}`, { method: "DELETE" }),
+  /**
+   * Upload a clip + transcript and start an encode. multipart/form-data, so the
+   * Content-Type header is deliberately UNSET — the browser must supply it with
+   * the generated multipart boundary, and apiFetch's JSON default would break it.
+   */
+  clone: (body: {
+    audio: File;
+    transcript: string;
+    displayName: string;
+    name?: string;
+    consent: boolean;
+  }) => {
+    const fd = new FormData();
+    fd.append("audio", body.audio);
+    fd.append("transcript", body.transcript);
+    fd.append("displayName", body.displayName);
+    if (body.name) fd.append("name", body.name);
+    fd.append("consent", String(body.consent));
+    return apiFetch<{ id: string; status: Voice["status"]; error?: string }>(
+      "/voices/clone",
+      { method: "POST", body: fd }
+    );
+  },
+};
+
 export const Auth = {
   login: (email: string, password: string) =>
     apiFetch<{ token: string; role: string }>("/auth/login",
