@@ -103,6 +103,10 @@ const STT_ICON: Record<string, LucideIcon> = {
   openai: Sparkles,
   asrtest: FlaskConical,
   whisper_local: Languages,
+  // sherpa-onnx engines (self-hosted ONNX, one fixed model each).
+  "moonshine-base": Ear,
+  "parakeet-v2": Cpu,
+  "parakeet-v3": Cpu,
 };
 const TTS_ICON: Record<TtsEngine, LucideIcon> = {
   kokoro: Volume2,
@@ -120,6 +124,11 @@ const STT_LABEL: Record<string, string> = {
   openai: "OpenAI Whisper",
   asrtest: "Urdu (Local)",
   whisper_local: "Multilingual (Local)",
+  // Only used as the offline fallback + for an engine the catalog no longer
+  // returns; the live labels come from GET /api/catalog.
+  "moonshine-base": "Moonshine (Local)",
+  "parakeet-v2": "Parakeet v2 (Local)",
+  "parakeet-v3": "Parakeet v3 (Local)",
 };
 
 /* Small cloud vs self-hosted pill shown beside each engine/provider option. */
@@ -535,6 +544,27 @@ export function EditorForm({ assistantId, defaultValues }: EditorFormProps) {
     [setValue, getValues, llmProviders]
   );
 
+
+  /** Drop the whisper-only model size when moving to an engine that has none.
+      Driven by the Select's onValueChange (a real user action), NOT an effect —
+      an effect can't tell a genuine switch from React hydrating the form, so it
+      would clear a saved value and falsely dirty the form on open. */
+  const onSttEngineChange = useCallback(
+    (engine: string | null) => {
+      if (!engine) return;
+      setValue("stt.engine", engine as Assistant["stt"]["engine"], {
+        shouldDirty: true,
+      });
+      const sizes = sttEngines?.find((e) => e.id === engine)?.modelSizes;
+      if (!sizes?.length && getValues("stt.model")) {
+        // The sherpa engines are one fixed model each; leaving e.g.
+        // "large-v3-turbo" behind would store a size that means nothing.
+        setValue("stt.model", null, { shouldDirty: true });
+      }
+    },
+    [setValue, getValues, sttEngines]
+  );
+
   /** Reset the voice to the first valid option for a newly-picked TTS engine. */
   const onTtsEngineChange = useCallback(
     (engine: TtsEngine | null) => {
@@ -854,7 +884,7 @@ export function EditorForm({ assistantId, defaultValues }: EditorFormProps) {
                         <Select
                           items={sttEngineItems}
                           value={field.value}
-                          onValueChange={field.onChange}
+                          onValueChange={onSttEngineChange}
                         >
                           <FormControl>
                             <SelectTrigger className="w-full">

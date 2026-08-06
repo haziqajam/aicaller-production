@@ -71,6 +71,7 @@ import {
   LanguagesIcon,
   Volume2Icon,
   CpuIcon,
+  EarIcon,
   MicIcon,
   GlobeIcon,
   GaugeIcon,
@@ -91,6 +92,10 @@ const STT_ICON: Record<string, LucideIcon> = {
   openai: SparklesIcon,
   asrtest: FlaskConicalIcon,
   whisper_local: LanguagesIcon,
+  // sherpa-onnx engines (self-hosted ONNX, one fixed model each).
+  "moonshine-base": EarIcon,
+  "parakeet-v2": CpuIcon,
+  "parakeet-v3": CpuIcon,
 };
 const TTS_ICON: Record<TtsEngine, LucideIcon> = {
   kokoro: Volume2Icon,
@@ -105,6 +110,9 @@ const STT_LABEL: Record<string, string> = {
   openai: "OpenAI Whisper",
   asrtest: "Urdu (Local)",
   whisper_local: "Multilingual (Local)",
+  "moonshine-base": "Moonshine (Local)",
+  "parakeet-v2": "Parakeet v2 (Local)",
+  "parakeet-v3": "Parakeet v3 (Local)",
 };
 const TTS_LABEL: Record<string, string> = {
   kokoro: "English (Local)",   // keep in sync with the assistant editor + card-helpers
@@ -321,6 +329,27 @@ export function FlowEditorForm({ flowId, defaultValues }: FlowEditorFormProps) {
       }
     },
     [setValue, getValues, llmProviders]
+  );
+
+
+  /** Drop the whisper-only model size when moving to an engine that has none.
+      Driven by the Select's onValueChange (a real user action), NOT an effect —
+      an effect can't tell a genuine switch from React hydrating the form, so it
+      would clear a saved value and falsely dirty the form on open. */
+  const onSttEngineChange = React.useCallback(
+    (engine: string | null) => {
+      if (!engine) return;
+      setValue("stt.engine", engine as Flow["stt"]["engine"], {
+        shouldDirty: true,
+      });
+      const sizes = sttEngines?.find((e) => e.id === engine)?.modelSizes;
+      if (!sizes?.length && getValues("stt.model")) {
+        // The sherpa engines are one fixed model each; leaving e.g.
+        // "large-v3-turbo" behind would store a size that means nothing.
+        setValue("stt.model", null, { shouldDirty: true });
+      }
+    },
+    [setValue, getValues, sttEngines]
   );
 
   /** Reset the voice to the first valid option for a newly-picked TTS engine. */
@@ -619,7 +648,7 @@ export function FlowEditorForm({ flowId, defaultValues }: FlowEditorFormProps) {
                   <Select
                     items={sttEngineItems}
                     value={field.value}
-                    onValueChange={field.onChange}
+                    onValueChange={onSttEngineChange}
                   >
                     <FormControl>
                       <SelectTrigger className="w-full">

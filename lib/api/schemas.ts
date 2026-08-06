@@ -36,7 +36,20 @@ export const llmConfig = z.object({
   pin: z.string().nullish(),
 });
 export const sttConfig = z.object({
-  engine: z.enum(["deepgram", "openai", "asrtest", "whisper_local"]).default("deepgram"),
+  // Mirrors caller/models.py STTConfig. The sherpa-onnx ids MUST be listed: this
+  // schema parses every assistant the editor loads, so an unlisted engine would
+  // be rejected client-side even after the backend accepted the save.
+  engine: z
+    .enum([
+      "deepgram",
+      "openai",
+      "asrtest",
+      "whisper_local",
+      "moonshine-base",
+      "parakeet-v2",
+      "parakeet-v3",
+    ])
+    .default("deepgram"),
   language: z.string().max(LIMITS.language).default("en"),
   // Whisper-local model size (e.g. "small", "large-v3-turbo"); omitted for other engines.
   // nullish (not just optional): the Base UI Select holds `null` when unselected, and
