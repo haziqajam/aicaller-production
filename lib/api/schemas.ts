@@ -79,8 +79,38 @@ export const idleConfig = z.object({
   maxRetries: z.number().int().min(0).max(10).default(2),
   holdMaxSec: z.number().min(1).max(600).default(30),
 });
+/**
+ * Accent changer — after a transfer, the HUMAN AGENT's speech is re-voiced in a
+ * chosen voice before the customer hears it.
+ *
+ * Mirrors caller/models.py AccentConfig, and must live under `transfer` because
+ * that is where the backend reads it (TransferConfig.accent). `enabled` defaults
+ * false, so an assistant that predates this feature round-trips unchanged.
+ *
+ * `sttEngine` / `stopMs` / `requireGpu` are accepted so a doc that already has
+ * them survives a save — the editor deliberately does NOT surface them:
+ * requireGpu should stay true until CPU TTS is fast enough, and the other two are
+ * latency tuning, not user-facing choices.
+ */
+export const accentConfig = z.object({
+  enabled: z.boolean().default(false),
+  ttsEngine: z.enum(["kokoro", "neutts"]).default("kokoro"),
+  voice: z.string().max(LIMITS.voice).default("af_heart"),
+  sttEngine: z
+    .enum(["parakeet-v2", "parakeet-v3", "moonshine-base"])
+    .default("parakeet-v2"),
+  stopMs: z.number().int().min(40).max(1000).default(100),
+  requireGpu: z.boolean().default(true),
+});
+
+/** The accent defaults, so page-level `defaultValues` literals don't restate them. */
+export const DEFAULT_ACCENT = accentConfig.parse({});
+
 export const transferConfig = z.object({
   enabled: z.boolean().default(false),
+  // Nested under transfer to match the backend; `.default({})` so an assistant
+  // saved before this existed still parses (zod fills every inner default).
+  accent: accentConfig.default(() => accentConfig.parse({})),
   // Spoken to the CALLER right before the hand-off (e.g. "Please hold while I connect you.").
   announcement: z.string().max(LIMITS.announcement).default(""),
   // Natural-language description of when to transfer; injected as guidance so the
@@ -206,7 +236,9 @@ export const assistantSchema = z.object({
   stt: sttConfig.default(() => ({ engine: "deepgram" as const, language: "en" })),
   tts: ttsConfig.default(() => ({ engine: "kokoro" as const, voice: "af_heart", speed: 1 })),
   idle: idleConfig.default(() => ({ timeout: 5, maxRetries: 2, holdMaxSec: 30 })),
-  transfer: transferConfig.default(() => ({ enabled: false, announcement: "", triggerPhrase: "", targets: [] })),
+  // Parsed from {} so every inner default (including accent) comes from the
+  // schema itself — hand-listing the fields silently drops new ones.
+  transfer: transferConfig.default(() => transferConfig.parse({})),
   voicemail: voicemailConfig.default(() => ({
     enabled: false,
     message: "Sorry we couldn't reach you. Please call us back at your convenience. Thank you.",
@@ -306,7 +338,9 @@ export const flowSchema = z.object({
   // Call features — parity with assistants. Transfer feeds node-level
   // `transfer` functions; voicemail/IVR are phone-call-only (inert in the
   // browser test).
-  transfer: transferConfig.default(() => ({ enabled: false, announcement: "", triggerPhrase: "", targets: [] })),
+  // Parsed from {} so every inner default (including accent) comes from the
+  // schema itself — hand-listing the fields silently drops new ones.
+  transfer: transferConfig.default(() => transferConfig.parse({})),
   voicemail: voicemailConfig.default(() => ({
     enabled: false,
     message: "Sorry we couldn't reach you. Please call us back at your convenience. Thank you.",

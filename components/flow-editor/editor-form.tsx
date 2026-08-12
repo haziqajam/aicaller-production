@@ -32,6 +32,11 @@ import { cn } from "@/lib/utils";
 import { Slider } from "@/components/ui/slider";
 import { flowSchema, type Flow, type FlowNode } from "@/lib/api/schemas";
 import { Flows, Tools, Voices, type Voice } from "@/lib/api/resources";
+import {
+  AccentSection,
+  useAccentUiVisible,
+  type AccentForm,
+} from "@/components/accent/accent-section";
 import type { Tool } from "@/lib/api/schemas";
 import { toastApiError } from "@/lib/api/errors";
 import { Catalog } from "@/lib/api/catalog";
@@ -171,6 +176,8 @@ interface FlowEditorFormProps {
 export function FlowEditorForm({ flowId, defaultValues }: FlowEditorFormProps) {
   const router = useRouter();
   const qc = useQueryClient();
+  // Accent changer UI is gated — see useAccentUiVisible.
+  const accentUiVisible = useAccentUiVisible();
   const isNew = !flowId;
 
   const form = useForm<Flow>({
@@ -999,6 +1006,16 @@ export function FlowEditorForm({ flowId, defaultValues }: FlowEditorFormProps) {
                   )}
                 />
               </div>
+
+              {/* Accent changer — applies to the hand-off this block configures. */}
+              {accentUiVisible && (
+                <AccentSection
+                  // cast: react-hook-form's UseFormReturn is invariant —
+                  // see AccentForm in accent-section.tsx.
+                  form={form as unknown as AccentForm}
+                  ttsEngines={ttsEngines}
+                />
+              )}
             </div>
 
             {/* Voicemail detection — outbound phone calls only. */}

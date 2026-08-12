@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { Flows } from "@/lib/api/resources";
 import { parseApiError } from "@/lib/api/errors";
-import { type Flow } from "@/lib/api/schemas";
+import { type Flow, DEFAULT_ACCENT } from "@/lib/api/schemas";
 import { FlowEditorForm } from "@/components/flow-editor/editor-form";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent } from "@/components/ui/card";
@@ -34,7 +34,10 @@ const NEW_DEFAULTS: Flow = {
   tts: { engine: "kokoro", voice: "af_heart", speed: 1 },
   idle: { timeout: 5, maxRetries: 2, holdMaxSec: 30 },
   vad: { responsiveness: "balanced" },
-  transfer: { enabled: false, announcement: "", triggerPhrase: "", targets: [] },
+  transfer: {
+    enabled: false, announcement: "", triggerPhrase: "", targets: [],
+    accent: DEFAULT_ACCENT,
+  },
   voicemail: {
     enabled: false,
     message: "Sorry we couldn't reach you. Please call us back at your convenience. Thank you.",

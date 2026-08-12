@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { Assistants } from "@/lib/api/resources";
 import { parseApiError } from "@/lib/api/errors";
-import { type Assistant } from "@/lib/api/schemas";
+import { type Assistant, DEFAULT_ACCENT } from "@/lib/api/schemas";
 import { EditorForm } from "@/components/assistant-editor/editor-form";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent } from "@/components/ui/card";
@@ -22,7 +22,10 @@ const NEW_DEFAULTS: Assistant = {
   stt: { engine: "deepgram", language: "en" },
   tts: { engine: "kokoro", voice: "af_heart", speed: 1 },
   idle: { timeout: 5, maxRetries: 2, holdMaxSec: 30 },
-  transfer: { enabled: false, announcement: "", triggerPhrase: "", targets: [] },
+  transfer: {
+    enabled: false, announcement: "", triggerPhrase: "", targets: [],
+    accent: DEFAULT_ACCENT,
+  },
   voicemail: {
     enabled: false,
     message: "Sorry we couldn't reach you. Please call us back at your convenience. Thank you.",
