@@ -83,14 +83,12 @@ export const idleConfig = z.object({
  * Accent changer — after a transfer, the HUMAN AGENT's speech is re-voiced in a
  * chosen voice before the customer hears it.
  *
- * Mirrors caller/models.py AccentConfig, and must live under `transfer` because
- * that is where the backend reads it (TransferConfig.accent). `enabled` defaults
- * false, so an assistant that predates this feature round-trips unchanged.
+ * v2: this is a PER-OWNER setting served by GET/PUT /accent-config, not a field
+ * on an assistant. The copy still nested under `transfer` below exists only so a
+ * v1 assistant document keeps parsing — nothing writes it and no UI shows it.
  *
- * `sttEngine` / `stopMs` / `requireGpu` are accepted so a doc that already has
- * them survives a save — the editor deliberately does NOT surface them:
- * requireGpu should stay true until CPU TTS is fast enough, and the other two are
- * latency tuning, not user-facing choices.
+ * `sttEngine` / `stopMs` are latency tuning rather than user choices, so the page
+ * does not surface them; they round-trip so a stored value is never reset.
  */
 export const accentConfig = z.object({
   enabled: z.boolean().default(false),
@@ -100,16 +98,21 @@ export const accentConfig = z.object({
     .enum(["parakeet-v2", "parakeet-v3", "moonshine-base"])
     .default("parakeet-v2"),
   stopMs: z.number().int().min(40).max(1000).default(100),
+  // v2 placement: prefer a cheap CPU accent pod. NeuTTS still forces GPU — it
+  // runs below realtime on CPU, so the audio underruns mid-sentence.
+  preferCpu: z.boolean().default(true),
+  // v1 only; accepted so an older document round-trips. Not read by v2 routing.
   requireGpu: z.boolean().default(true),
 });
+export type AccentConfig = z.infer<typeof accentConfig>;
 
 /** The accent defaults, so page-level `defaultValues` literals don't restate them. */
 export const DEFAULT_ACCENT = accentConfig.parse({});
 
 export const transferConfig = z.object({
   enabled: z.boolean().default(false),
-  // Nested under transfer to match the backend; `.default({})` so an assistant
-  // saved before this existed still parses (zod fills every inner default).
+  // v1 location, kept ONLY so a stored assistant still parses. v2 reads the
+  // owner's config from /accent-config; nothing writes this and no UI shows it.
   accent: accentConfig.default(() => accentConfig.parse({})),
   // Spoken to the CALLER right before the hand-off (e.g. "Please hold while I connect you.").
   announcement: z.string().max(LIMITS.announcement).default(""),

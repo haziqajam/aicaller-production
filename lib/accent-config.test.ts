@@ -1,17 +1,50 @@
 import { describe, it, expect } from "vitest";
-import { assistantSchema, transferConfig, DEFAULT_ACCENT } from "./api/schemas";
+import {
+  accentConfig, assistantSchema, transferConfig, DEFAULT_ACCENT,
+} from "./api/schemas";
 
 /**
- * The accent block must round-trip through the editor's schema. The STT dropdown
- * work is the cautionary tale: a field missing from the zod schema is silently
- * dropped on save even when the backend accepts it.
+ * v2: accent is a PER-OWNER config served by GET/PUT /accent-config, not a field
+ * on an assistant. These pin the standalone schema the settings page round-trips,
+ * plus the backward-compat parse of a v1 assistant document.
  */
-describe("accent config schema", () => {
-  it("defaults to OFF so existing assistants are unaffected", () => {
+describe("accent config schema (v2, standalone)", () => {
+  it("defaults to OFF with a CPU-first placement", () => {
+    const c = accentConfig.parse({});
+    expect(c.enabled).toBe(false);
+    expect(c.ttsEngine).toBe("kokoro");
+    expect(c.voice).toBe("af_heart");
+    // v2 runs the relay on its own pod, so CPU is the cheap default.
+    expect(c.preferCpu).toBe(true);
+  });
+
+  it("round-trips what the settings page sends", () => {
+    const c = accentConfig.parse({
+      enabled: true, ttsEngine: "neutts", voice: "sophie", preferCpu: false,
+    });
+    expect(c).toMatchObject({
+      enabled: true, ttsEngine: "neutts", voice: "sophie", preferCpu: false,
+    });
+  });
+
+  it("keeps the tuning fields the page does not surface", () => {
+    const c = accentConfig.parse({ stopMs: 250, sttEngine: "parakeet-v3" });
+    expect(c.stopMs).toBe(250);
+    expect(c.sttEngine).toBe("parakeet-v3");
+  });
+
+  it("rejects an engine the backend would 422", () => {
+    expect(() => accentConfig.parse({ ttsEngine: "elevenlabs" })).toThrow();
+  });
+});
+
+describe("v1 backward compatibility", () => {
+  it("still parses a v1 assistant that carries transfer.accent", () => {
     const a = assistantSchema.parse({ name: "x", systemPrompt: "y" });
     expect(a.transfer.accent.enabled).toBe(false);
     expect(a.transfer.accent.ttsEngine).toBe("kokoro");
     expect(a.transfer.accent.voice).toBe("af_heart");
+    // v1 field retained so an old document does not fail to parse.
     expect(a.transfer.accent.requireGpu).toBe(true);
   });
 

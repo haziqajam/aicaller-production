@@ -32,6 +32,7 @@ export const NAV_GROUPS: NavGroup[] = [
   ]},
   { label: "Settings", items: [
     { label: "Twilio accounts", href: "/settings/twilio" },
+    { label: "Accent changer", href: "/settings/accent" },
   ]},
   { label: "Admin", adminOnly: true, items: [
     { label: "Users", href: "/admin/users" },

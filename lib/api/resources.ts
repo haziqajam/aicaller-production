@@ -1,4 +1,5 @@
 import { apiFetch } from "./client";
+import type { AccentConfig } from "./schemas";
 import type {
   Assistant, Campaign, Flow, Tool, Lead, LeadList, NumberList, NumberListMember,
 } from "./schemas";
@@ -399,6 +400,27 @@ export const Voices = {
       { method: "POST", body: fd }
     );
   },
+};
+
+/**
+ * Per-owner accent-changer settings (v2). One config per account — enabling it
+ * covers every assistant the owner runs, which is why it is NOT on the assistant.
+ */
+export const AccentConfigApi = {
+  get: () => apiFetch<AccentConfig>("/accent-config"),
+  update: (cfg: AccentConfig) =>
+    apiFetch<AccentConfig>("/accent-config", {
+      method: "PUT",
+      body: JSON.stringify(cfg),
+    }),
+  /** Admin-only: read/set another owner's config. */
+  getFor: (ownerId: string) =>
+    apiFetch<AccentConfig>(`/accent-config/${encodeURIComponent(ownerId)}`),
+  updateFor: (ownerId: string, cfg: AccentConfig) =>
+    apiFetch<AccentConfig>(`/accent-config/${encodeURIComponent(ownerId)}`, {
+      method: "PUT",
+      body: JSON.stringify(cfg),
+    }),
 };
 
 export const Auth = {

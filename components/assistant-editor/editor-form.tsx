@@ -82,11 +82,6 @@ import {
 } from "lucide-react";
 import { QuestionsEditor } from "@/components/campaign/questions-editor";
 import { CloneVoiceDialog } from "@/components/voices/clone-voice-dialog";
-import {
-  AccentSection,
-  useAccentUiVisible,
-  type AccentForm,
-} from "@/components/accent/accent-section";
 
 interface EditorFormProps {
   assistantId: string | undefined;
@@ -253,9 +248,6 @@ const FIELD_TAB: Record<string, string> = {
 export function EditorForm({ assistantId, defaultValues }: EditorFormProps) {
   const isNew = assistantId === undefined;
   const queryClient = useQueryClient();
-  // Accent changer UI is gated: its live SIP routing is unproven, so it is
-  // admin-only unless NEXT_PUBLIC_ACCENT_UI=1 is baked at build time.
-  const accentUiVisible = useAccentUiVisible();
 
   const form = useForm<Assistant>({
     // zodResolver input/output types differ in zod v4; cast to satisfy RHF
@@ -1431,16 +1423,6 @@ export function EditorForm({ assistantId, defaultValues }: EditorFormProps) {
                         )}
                       />
 
-                      {/* Accent changer — only meaningful once a transfer happens,
-                          so it lives inside the transfer-enabled block. */}
-                      {accentUiVisible && (
-                        <AccentSection
-                          // cast: react-hook-form's UseFormReturn is invariant —
-                          // see AccentForm in accent-section.tsx.
-                          form={form as unknown as AccentForm}
-                          ttsEngines={ttsEngines}
-                        />
-                      )}
                     </div>
                   )}
                 </CardContent>
