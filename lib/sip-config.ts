@@ -17,10 +17,10 @@ export function buildCarrierBlock(
   const user = seat.sipUsername || "<username>";
   const pw = seat.sipPassword || "<password>";
   return (
-    `; AIDEVGEN AI bot trunk\n` +
+    `; JERALI AI bot trunk\n` +
     `register => ${user}:${pw}@${host}\n` +
     `\n` +
-    `[aidevgen]\n` +
+    `[jerali]\n` +
     `type=peer\n` +
     `host=${host}\n` +
     `username=${user}\n` +

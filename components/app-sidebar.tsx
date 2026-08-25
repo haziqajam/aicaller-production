@@ -96,7 +96,7 @@ export function AppSidebar() {
           </div>
           {/* Wordmark */}
           <span className="text-sm font-semibold tracking-tight text-sidebar-foreground group-data-[collapsible=icon]:hidden">
-            AI Caller
+            Jerali
           </span>
         </div>
       </SidebarHeader>

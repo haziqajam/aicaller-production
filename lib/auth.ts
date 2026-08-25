@@ -1,5 +1,5 @@
-const TOKEN_KEY = "aicaller_token";
-const ROLE_KEY = "aicaller_role";
+const TOKEN_KEY = "jerali_token";
+const ROLE_KEY = "jerali_role";
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;

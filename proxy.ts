@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 export function proxy(req: NextRequest) {
-  const hasToken = Boolean(req.cookies.get("aicaller_token")?.value);
+  const hasToken = Boolean(req.cookies.get("jerali_token")?.value);
   const path = req.nextUrl.pathname;
   if (path === "/login") {
     if (hasToken) return NextResponse.redirect(new URL("/", req.url));

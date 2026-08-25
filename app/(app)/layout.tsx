@@ -78,7 +78,7 @@ export default function AppLayout({
   // (app)/ are client components and can't export Next `metadata`, so we set
   // `document.title` here using the same derivation that drives the breadcrumb.
   React.useEffect(() => {
-    document.title = `${deriveTitle(pathname)} · AI Caller`;
+    document.title = `${deriveTitle(pathname)} · Jerali`;
   }, [pathname]);
 
   // `getRole()` reads localStorage, so it returns null on the server and a real

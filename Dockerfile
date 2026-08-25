@@ -1,5 +1,5 @@
 # =============================================================================
-# AI Caller console — Next.js 16 (standalone) image
+# Jerali console — Next.js 16 (standalone) image
 # NOTE: NEXT_PUBLIC_API_BASE is baked into the client bundle at BUILD time, so it
 # must be the URL the BROWSER uses to reach the backend (not the in-network name).
 # Pass it as a build arg (see ../docker-compose.yml).

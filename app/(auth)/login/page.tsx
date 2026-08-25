@@ -79,7 +79,7 @@ export default function LoginPage() {
               Command Center
             </p>
             <h1 className="mt-0.5 text-xl font-semibold tracking-tight text-foreground">
-              AI Caller
+              Jerali
             </h1>
           </div>
         </div>

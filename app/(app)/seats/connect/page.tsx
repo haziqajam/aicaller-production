@@ -271,7 +271,7 @@ export default function ConnectGuidePage() {
             <span className="tabular">86000</span> the number your campaign dials.
           </p>
           <CodeBlock label="Dialplan entry (goes on your VICIdial box)"
-            code={"exten => 86000,1,Dial(SIP/aidevgen/${EXTEN})"} />
+            code={"exten => 86000,1,Dial(SIP/jerali/${EXTEN})"} />
           <Callout tone="warn" icon={TriangleAlertIcon}>
             This is a <span className="font-medium">dialplan routing rule</span>, not a desk-phone or
             agent extension. You&apos;re not adding a phone, an agent, or a seat — just a number that
@@ -281,7 +281,7 @@ export default function ConnectGuidePage() {
           <Callout>
             Pick any unused number — the exact digits don&apos;t matter. Our gateway routes by which
             SIP account signed in, not by what was dialed.{" "}
-            <span className="tabular">aidevgen</span> here is the peer name from the block in step 3.
+            <span className="tabular">jerali</span> here is the peer name from the block in step 3.
           </Callout>
         </Step>
 

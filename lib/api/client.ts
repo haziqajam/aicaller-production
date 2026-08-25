@@ -10,7 +10,7 @@ if (typeof window !== "undefined" && !process.env.NEXT_PUBLIC_API_BASE) {
   console.warn(
     `[api] NEXT_PUBLIC_API_BASE is not set — falling back to ${FALLBACK_API_BASE}. ` +
       `If your backend is remote (e.g. ngrok), set NEXT_PUBLIC_API_BASE in ` +
-      `aidevgen_caller/.env.local and RESTART the dev server (NEXT_PUBLIC_* vars are ` +
+      `the app root's .env.local and RESTART the dev server (NEXT_PUBLIC_* vars are ` +
       `read at start, not hot-reloaded).`
   );
 }
